@@ -1,0 +1,178 @@
+{
+  "splits": {
+    "train": 800,
+    "val": 150,
+    "test": 150
+  },
+  "num_categories": 19,
+  "categories": [
+    "apple",
+    "baseball",
+    "book",
+    "bowtie",
+    "diamond",
+    "dog",
+    "door",
+    "envelope",
+    "eye",
+    "fish",
+    "hat",
+    "leaf",
+    "lightning",
+    "moon",
+    "pants",
+    "scissors",
+    "square",
+    "star",
+    "t-shirt"
+  ],
+  "formats": [
+    "png_64",
+    "npy_28"
+  ],
+  "styles_per_category": 3,
+  "augmentation": [
+    "rotation \u00b112\u00b0",
+    "shift \u00b16px",
+    "gaussian blur",
+    "gaussian noise",
+    "scale 0.8-1.2"
+  ],
+  "render_resolution": "128x128 -> downscale",
+  "apple": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "baseball": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "book": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "bowtie": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "diamond": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "dog": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "door": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "envelope": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "eye": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "fish": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "hat": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "leaf": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "lightning": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "moon": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "pants": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "scissors": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "square": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "star": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "t-shirt": {
+    "total": 1100,
+    "npy_shape": [
+      1100,
+      784
+    ]
+  },
+  "total_png": 20900,
+  "total_npy_per_class": 1100,
+  "generated_seconds": 234.82
+}

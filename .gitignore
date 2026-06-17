@@ -1,0 +1,64 @@
+# Virtual environments
+.venv/
+.venv311/
+venv/
+env/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+backend/.env
+
+# Face data (privacy - không commit ảnh khuôn mặt thật)
+face_data/lbph_face_model.yml
+face_data/labels.json
+face_data/samples/*
+!face_data/samples/.gitkeep
+
+# Build artifacts từ các lần nộp bài
+source_code/
+Group01_DeepLearning_Project/
+Group01_DeepLearning_Project.zip
+_locked_duplicate_delete_after_closing_pdf/
+
+# Backend model copy cũ
+backend/model/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+assets/reports/*.log
+
+# Large/generated files excluded from the GitHub-clean package
+data/npy_28/
+assets/results/
+assets/reports/
+report/
+slides/
+plan/
+
+# Model checkpoints generated during training
+models/*.h5
+models/*_best.keras
+models/*_retrained.keras
+models/resnet_sketch_best.keras
+!models/airdrawvocab_best_advanced.keras
+!models/categories.json
+
+# Jupyter / local notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints

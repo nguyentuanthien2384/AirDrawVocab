@@ -18,7 +18,9 @@ Sau đó mở:
 http://127.0.0.1:8000
 ```
 
-Model chính hiện tại là `models/airdrawvocab_best_advanced.keras`, đã train với accuracy khoảng `99.33%` trên 2,850 mẫu test. Nếu chỉ muốn dùng project để demo hoặc nộp bài, bạn không cần train lại.
+Model chính hiện tại là `models/airdrawvocab_best_advanced.keras`. Bản model này được **train lại bằng `train_clean.py`** trên dữ liệu QuickDraw thật và đạt **accuracy ~94.3%, Top-3 ~97.5%** trên 11,400 mẫu test, các lớp đều 91–98% (cân bằng). Thứ tự nhãn trong `models/categories.json` đã được đồng bộ đúng với model. Nếu chỉ muốn dùng project để demo hoặc nộp bài, bạn không cần train lại.
+
+> **Quan trọng (đã sửa lỗi nhận diện):** model cũ trong bản zip ban đầu bị "suy biến" — nó đoán hầu hết hình vẽ thành `apple` do file `categories.json` lệch thứ tự nhãn so với model và pipeline train cũ (`advanced_train_model.py`) bị lỗi `BatchNormalization` trên TensorFlow 2.21/Keras 3 (train accuracy cao nhưng val/inference ~ngẫu nhiên). Đã khắc phục bằng `train_clean.py` (bỏ BatchNorm, augmentation trong tf.data) và đồng bộ lại nhãn. Xem mục 10.
 
 Dự án này đã tổng hợp từ 2 source code bạn gửi thành một bản chung gồm:
 
@@ -317,9 +319,33 @@ Lưu ý: nên train/chạy demo bằng **Python 3.11 hoặc 3.12 64-bit**. Pytho
 
 ---
 
-## 10. Train nâng cao để đạt độ chính xác tốt nhất
+## 10. Train lại model (khuyến nghị dùng `train_clean.py`)
 
-Khuyến nghị dùng script nâng cao này trước khi demo/nộp bài:
+> **Khuyến nghị mới:** dùng `train_clean.py`. Script `advanced_train_model.py` bị lỗi `BatchNormalization` trên TensorFlow 2.21/Keras 3 khiến val/inference accuracy ~ngẫu nhiên dù train accuracy cao (đây là nguyên nhân model cũ nhận diện sai). `train_clean.py` đã bỏ BatchNorm, đưa augmentation vào tf.data, gán nhãn đúng thứ tự `config.CATEGORIES` và tự đồng bộ `models/categories.json`.
+
+### Bước 1: tải dữ liệu QuickDraw (nếu chưa có)
+
+```bat
+.\.venv311\Scripts\python.exe dev_download_quickdraw.py --per-class 8000
+```
+
+Lệnh này tải một phần nhỏ mỗi lớp (~6MB/lớp) vào `data/npy_28/`, nhanh hơn nhiều so với tải full `.npy`.
+
+### Bước 2: train (đã tối ưu tốc độ, ~8–12 phút trên CPU)
+
+```bat
+.\.venv311\Scripts\python.exe train_clean.py
+```
+
+Mặc định: 2000 mẫu/lớp, batch 512, early stopping sớm, dùng hết nhân CPU → train nhanh mà vẫn đạt ~93–94%. Muốn chính xác hơn (chậm hơn) thì tăng dữ liệu:
+
+```bat
+.\.venv311\Scripts\python.exe train_clean.py --train-per-class 4000 --val-per-class 600 --test-per-class 600 --epochs 22
+```
+
+Sau khi train xong, model lưu vào `models/airdrawvocab_best_advanced.keras` và `models/categories.json` được đồng bộ tự động. Khởi động lại web để nạp model mới.
+
+### (Tham khảo) script nâng cao cũ — KHÔNG khuyến nghị do còn lỗi BatchNorm
 
 ```bat
 python advanced_train_model.py --model resnet_sketch --epochs 60 --batch-size 64

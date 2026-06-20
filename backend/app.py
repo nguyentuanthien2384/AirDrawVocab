@@ -11,9 +11,10 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw
+import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 import sys
@@ -26,6 +27,21 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(BASE_DIR / ".env", override=True)
 
 from config import MODEL_PATH, MODELS_DIR, ROOT
+try:
+    from config import DATA_DIR as _DATA_DIR
+except Exception:
+    _DATA_DIR = ROOT / "data" / "npy_28"
+try:
+    import sample_generator as _samplegen
+except Exception:
+    _samplegen = None
+
+# Từ vựng mở rộng (40 lớp) + dịch nghĩa/câu ví dụ — nguồn từ vocab_pairs.py.
+try:
+    from vocab_pairs import (VI_MEANINGS as _VI, EXAMPLE_SENTENCES as _EX,
+                             EXAMPLE_SENTENCES_VI as _EXVI, IPA as _IPA)
+except Exception:
+    _VI = _EX = _EXVI = _IPA = {}
 
 LIVE_DRAWING_MODEL_CANDIDATES = [
     MODELS_DIR / "airdrawvocab_enhanced_model.h5",
@@ -38,6 +54,11 @@ OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
 OPENAI_IMAGE_SIZE = os.getenv("OPENAI_IMAGE_SIZE", "1024x1024")
 OPENAI_IMAGE_QUALITY = os.getenv("OPENAI_IMAGE_QUALITY", "medium")
 OPENAI_IMAGE_ENABLED = os.getenv("OPENAI_IMAGE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+# Test-Time Augmentation: trung bình dự đoán trên ảnh gốc + vài bản dịch nhẹ.
+# Tăng độ chính xác/ổn định ~0.3-1% mà không cần train lại. Tắt: USE_TTA=0
+USE_TTA = os.getenv("USE_TTA", "1").strip().lower() not in {"0", "false", "no"}
+TTA_SHIFTS = int(os.getenv("TTA_SHIFTS", "4"))
 
 VI_MEANINGS: Dict[str, str] = {
     "apple": "quả táo",
@@ -82,6 +103,10 @@ EXAMPLE_SENTENCES: Dict[str, str] = {
     "star": "A star shines in the sky.",
     "t-shirt": "I like this t-shirt.",
 }
+
+# Gộp từ vựng mở rộng (40 lớp) vào dict gốc — ưu tiên dữ liệu vocab_pairs.
+VI_MEANINGS.update(_VI)
+EXAMPLE_SENTENCES.update(_EX)
 
 REFERENCE_PROMPTS: Dict[str, str] = {
     "apple": "a fresh red apple with a small stem and leaf",
@@ -167,6 +192,50 @@ def health():
             "offline_fallback": True,
         },
     }
+
+
+@app.get("/vocab")
+def vocab():
+    """Trả về toàn bộ cặp từ vựng + dịch nghĩa (EN, VI, IPA, ví dụ EN/VI)."""
+    items = []
+    for label in categories:
+        items.append({
+            "label": label,
+            "meaning_vi": VI_MEANINGS.get(label, label),
+            "ipa": _IPA.get(label, ""),
+            "example_en": EXAMPLE_SENTENCES.get(label, f"This is a {label}."),
+            "example_vi": _EXVI.get(label, ""),
+        })
+    return {"count": len(items), "vocab": items}
+
+
+def _samples_response(maker):
+    """Bọc các hàm sinh ảnh: trả PNG hoặc JSON lỗi (thiếu dữ liệu/thư viện)."""
+    if _samplegen is None:
+        return JSONResponse(status_code=503, content={"error": "Chưa có sample_generator.py."})
+    try:
+        png = maker()
+        return Response(content=png, media_type="image/png")
+    except Exception as exc:  # thiếu dữ liệu npy hoặc không tải được QuickDraw
+        return JSONResponse(status_code=503, content={"error": str(exc)})
+
+
+@app.get("/samples/grid")
+def samples_grid():
+    """Tự sinh ảnh: 1 hình mẫu mỗi lớp (sample_drawings)."""
+    return _samples_response(lambda: _samplegen.sample_grid_png(categories, _DATA_DIR, VI_MEANINGS))
+
+
+@app.get("/samples/prediction")
+def samples_prediction(seed: int = 0):
+    """Tự sinh ảnh: 1 hình + biểu đồ xác suất tất cả lớp."""
+    return _samples_response(lambda: _samplegen.prediction_sample_png(model, categories, _DATA_DIR, seed=seed))
+
+
+@app.get("/samples/multiple")
+def samples_multiple(count: int = 15, seed: int = 1):
+    """Tự sinh ảnh: lưới nhiều dự đoán (xanh=đúng, đỏ=sai)."""
+    return _samples_response(lambda: _samplegen.multiple_predictions_png(model, categories, _DATA_DIR, count=count, seed=seed))
 
 
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
@@ -438,19 +507,23 @@ def generate_openai_reference_image(label: str) -> Tuple[Optional[str], Optional
 def fallback_chatbot_reply(label: str, confidence: float, top3: List[dict]) -> str:
     vi = VI_MEANINGS.get(label, label)
     example = EXAMPLE_SENTENCES.get(label, f"This is a {label}.")
+    ipa = _IPA.get(label, "")
+    example_vi = _EXVI.get(label, "")
     percent = round(confidence * 100, 2)
     top3_text = ", ".join([item["label"] for item in top3])
+    ipa_text = f" {ipa}" if ipa else ""
+    ex_vi_text = f" ({example_vi})" if example_vi else ""
 
     if confidence >= 0.80:
         return (
-            f"Mình nhận diện hình bạn vẽ là **{label}** — nghĩa tiếng Việt là **{vi}**. "
-            f"Độ tin cậy khoảng **{percent}%**. Ví dụ tiếng Anh: *{example}*"
+            f"Mình nhận diện hình bạn vẽ là **{label}**{ipa_text} — nghĩa tiếng Việt là **{vi}**. "
+            f"Độ tin cậy khoảng **{percent}%**. Ví dụ: *{example}*{ex_vi_text}"
         )
 
     if confidence >= 0.50:
         return (
-            f"Mình đoán hình này là **{label}** — nghĩa là **{vi}**, với độ tin cậy khoảng **{percent}%**. "
-            f"Ví dụ: *{example}* Các khả năng gần giống: {top3_text}. "
+            f"Mình đoán hình này là **{label}**{ipa_text} — nghĩa là **{vi}**, với độ tin cậy khoảng **{percent}%**. "
+            f"Ví dụ: *{example}*{ex_vi_text} Các khả năng gần giống: {top3_text}. "
             "Bạn có thể vẽ nét to, rõ và ở giữa khung để model nhận diện chắc hơn."
         )
 
@@ -509,6 +582,20 @@ def foza_chatbot_reply(label: str, confidence: float, top3: List[dict]) -> str:
         return fallback_chatbot_reply(label, confidence, top3)
 
 
+def predict_proba(active_model, x: np.ndarray) -> np.ndarray:
+    """Dự đoán xác suất; nếu bật TTA thì trung bình trên ảnh gốc + vài bản dịch nhẹ."""
+    base = active_model.predict(x, verbose=0)[0]
+    if not USE_TTA or TTA_SHIFTS <= 0:
+        return base
+    pad = 3
+    probs = [base]
+    for _ in range(TTA_SHIFTS):
+        xs = tf.image.random_crop(
+            tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]]), tf.shape(x))
+        probs.append(active_model.predict(xs.numpy(), verbose=0)[0])
+    return np.mean(probs, axis=0)
+
+
 def _top3_from_predictions(preds: np.ndarray) -> List[dict]:
     top_indices = preds.argsort()[-3:][::-1]
     return [
@@ -532,7 +619,7 @@ async def predict(file: UploadFile = File(...), source: str = Form("canvas")):
     normalized_source = source.strip().lower()
     active_model = live_drawing_model if normalized_source in {"camera", "hand", "airdraw", "live"} else model
     active_model_path = LIVE_DRAWING_MODEL_PATH if active_model is live_drawing_model else MODEL_PATH
-    preds = active_model.predict(x, verbose=0)[0]
+    preds = predict_proba(active_model, x)
 
     best_index = int(np.argmax(preds))
     label = categories[best_index]

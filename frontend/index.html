@@ -1,216 +1,338 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AirDrawVocab - Recognition Chatbot</title>
-  <link rel="stylesheet" href="/static/style.css" />
-</head>
-<body>
-  <main class="app-shell">
-    <section class="hero-card">
-      <div>
-        <p class="eyebrow">AirDrawVocab</p>
-        <h1>Vẽ hình, nhận diện từ vựng, chatbot giải thích</h1>
-        <p class="subtitle">
-          Vẽ một hình như apple, dog, star, moon, book... rồi bấm nhận diện.
-          Model CNN sẽ dự đoán và chatbot sẽ giải thích từ vựng cho bạn.
-        </p>
-      </div>
-    </section>
-
-
-
-    <section class="face-card">
-      <div class="card-header">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AirDrawVocab - Recognition Chatbot</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero-card">
         <div>
-          <h2>Camera Game Mode</h2>
-          <p>Vẽ bằng ngón tay trước camera, AI đoán liên tục theo phong cách QuickDraw.</p>
+          <p class="eyebrow">AirDrawVocab</p>
+          <h1>Vẽ hình, nhận diện từ vựng, chatbot giải thích</h1>
+          <p class="subtitle">
+            Vẽ một hình như apple, dog, star, moon, book... rồi bấm nhận diện.
+            Model CNN sẽ dự đoán và chatbot sẽ giải thích từ vựng cho bạn.
+          </p>
         </div>
-        <span class="badge">Camera Draw</span>
-      </div>
+      </section>
 
-      <div class="camera-game-hud">
-        <div class="hud-item hud-target">
-          <span>Draw</span>
-          <strong id="gameTarget">---</strong>
-        </div>
-        <div class="hud-item">
-          <span>Time</span>
-          <strong id="gameTime">20</strong>
-        </div>
-        <div class="hud-item">
-          <span>Level</span>
-          <strong id="gameLevel">1/6</strong>
-        </div>
-        <div class="hud-item">
-          <span>Lives</span>
-          <strong id="gameLives">♥♥♥</strong>
-        </div>
-        <div class="hud-item">
-          <span>Score</span>
-          <strong id="gameScore">0</strong>
-        </div>
-        <div class="hud-item">
-          <span>Streak</span>
-          <strong id="gameStreak">0</strong>
-        </div>
-      </div>
-
-      <div class="face-grid">
-        <div class="camera-panel">
-          <video id="faceVideo" autoplay muted playsinline></video>
-          <canvas id="targetGuideCanvas" width="640" height="480" aria-hidden="true"></canvas>
-          <canvas id="airDrawingCanvas" width="640" height="480" aria-hidden="true"></canvas>
-          <canvas id="handOverlayCanvas" width="640" height="480" aria-hidden="true"></canvas>
-          <div id="cameraPredictionOverlay" class="camera-prediction-overlay hidden">
-            <span>AI đang thấy</span>
-            <strong id="cameraPredictionLabel">---</strong>
+      <section class="face-card">
+        <div class="card-header">
+          <div>
+            <h2>Camera Game Mode</h2>
+            <p>
+              Vẽ bằng ngón tay trước camera, AI đoán liên tục theo phong cách
+              QuickDraw.
+            </p>
           </div>
-          <img id="cameraObjectImage" class="camera-object-image hidden" alt="Ảnh vật thể AI đang nhận diện" />
-          <canvas id="faceCanvas" width="320" height="240" class="hidden"></canvas>
+          <span class="badge">Camera Draw</span>
         </div>
-        <div class="face-controls">
-          <div class="quickdraw-controls">
-            <div class="tool-row">
-              <button id="startQuickDrawBtn" class="primary">Bắt đầu</button>
-              <button id="skipRoundBtn" class="secondary" disabled>Bỏ qua</button>
-              <button id="clearAirDrawBtn" class="secondary">Xóa nét</button>
-              <button id="submitAirDrawBtn" class="secondary">Nhận diện</button>
+
+        <div class="camera-game-hud">
+          <div class="hud-item hud-target">
+            <span>Draw</span>
+            <strong id="gameTarget">---</strong>
+          </div>
+          <div class="hud-item">
+            <span>Time</span>
+            <strong id="gameTime">20</strong>
+          </div>
+          <div class="hud-item">
+            <span>Level</span>
+            <strong id="gameLevel">1/6</strong>
+          </div>
+          <div class="hud-item">
+            <span>Lives</span>
+            <strong id="gameLives">♥♥♥</strong>
+          </div>
+          <div class="hud-item">
+            <span>Score</span>
+            <strong id="gameScore">0</strong>
+          </div>
+          <div class="hud-item">
+            <span>Streak</span>
+            <strong id="gameStreak">0</strong>
+          </div>
+        </div>
+
+        <div class="face-grid">
+          <div class="camera-panel">
+            <video id="faceVideo" autoplay muted playsinline></video>
+            <canvas
+              id="targetGuideCanvas"
+              width="640"
+              height="480"
+              aria-hidden="true"
+            ></canvas>
+            <canvas
+              id="airDrawingCanvas"
+              width="640"
+              height="480"
+              aria-hidden="true"
+            ></canvas>
+            <canvas
+              id="handOverlayCanvas"
+              width="640"
+              height="480"
+              aria-hidden="true"
+            ></canvas>
+            <div
+              id="cameraPredictionOverlay"
+              class="camera-prediction-overlay hidden"
+            >
+              <span>AI đang thấy</span>
+              <strong id="cameraPredictionLabel">---</strong>
             </div>
-            <label class="guide-toggle">
-              <input id="showGuideToggle" type="checkbox" checked />
-              Hiện mẫu
+            <img
+              id="cameraObjectImage"
+              class="camera-object-image hidden"
+              alt="Ảnh vật thể AI đang nhận diện"
+            />
+            <canvas
+              id="faceCanvas"
+              width="320"
+              height="240"
+              class="hidden"
+            ></canvas>
+          </div>
+          <div class="face-controls">
+            <div class="quickdraw-controls">
+              <div class="tool-row">
+                <button id="startQuickDrawBtn" class="primary">Bắt đầu</button>
+                <button id="skipRoundBtn" class="secondary" disabled>
+                  Bỏ qua
+                </button>
+                <button id="clearAirDrawBtn" class="secondary">Xóa nét</button>
+                <button id="submitAirDrawBtn" class="secondary">
+                  Nhận diện
+                </button>
+              </div>
+              <label class="guide-toggle">
+                <input id="showGuideToggle" type="checkbox" checked />
+                Hiện mẫu
+              </label>
+              <p id="quickDrawStatus" class="face-status">
+                Bấm Bắt đầu để chơi bằng camera.
+              </p>
+              <div id="targetGuideCard" class="target-guide-card hidden">
+                <div class="target-guide-copy">
+                  <span>Mẫu cần vẽ</span>
+                  <strong id="targetGuideLabel">---</strong>
+                  <small id="targetGuideHint">Bắt đầu game để xem mẫu.</small>
+                </div>
+                <canvas
+                  id="targetGuidePreview"
+                  width="180"
+                  height="140"
+                  aria-hidden="true"
+                ></canvas>
+              </div>
+              <div id="quickDrawGuesses" class="quickdraw-guesses">
+                AI chưa đoán.
+              </div>
+              <div id="recognizedCard" class="recognized-card">
+                <div class="recognized-copy">
+                  <span>AI đang thấy</span>
+                  <strong id="recognizedLabel">---</strong>
+                  <small id="recognizedConfidence"
+                    >Vẽ bằng ngón trỏ để hiện ảnh tương ứng.</small
+                  >
+                </div>
+                <img
+                  id="recognizedImage"
+                  alt="Ảnh minh họa vật thể được nhận diện"
+                />
+              </div>
+            </div>
+
+            <div class="face-auth-divider"></div>
+
+            <label>
+              Tên người dùng
+              <input id="faceUsername" type="text" placeholder="VD: thien" />
             </label>
-            <p id="quickDrawStatus" class="face-status">Bấm Bắt đầu để chơi bằng camera.</p>
-            <div id="targetGuideCard" class="target-guide-card hidden">
-              <div class="target-guide-copy">
-                <span>Mẫu cần vẽ</span>
-                <strong id="targetGuideLabel">---</strong>
-                <small id="targetGuideHint">Bắt đầu game để xem mẫu.</small>
-              </div>
-              <canvas id="targetGuidePreview" width="180" height="140" aria-hidden="true"></canvas>
-            </div>
-            <div id="quickDrawGuesses" class="quickdraw-guesses">AI chưa đoán.</div>
-            <div id="recognizedCard" class="recognized-card">
-              <div class="recognized-copy">
-                <span>AI đang thấy</span>
-                <strong id="recognizedLabel">---</strong>
-                <small id="recognizedConfidence">Vẽ bằng ngón trỏ để hiện ảnh tương ứng.</small>
-              </div>
-              <img id="recognizedImage" alt="Ảnh minh họa vật thể được nhận diện" />
-            </div>
-          </div>
-
-          <div class="face-auth-divider"></div>
-
-          <label>
-            Tên người dùng
-            <input id="faceUsername" type="text" placeholder="VD: thien" />
-          </label>
-          <div class="tool-row">
-            <button id="startCameraBtn" class="secondary">Bật camera</button>
-            <button id="stopCameraBtn" class="secondary" disabled>Tắt camera</button>
-            <button id="enrollFaceBtn" class="secondary">Đăng ký mặt</button>
-            <button id="verifyFaceBtn" class="primary">Xác thực</button>
-          </div>
-          <p id="faceStatus" class="face-status">Chưa bật camera khuôn mặt.</p>
-          <div class="hand-draw-controls">
             <div class="tool-row">
-              <button id="startHandDrawBtn" class="secondary">Vẽ tay</button>
-              <button id="stopHandDrawBtn" class="secondary" disabled>Dừng vẽ tay</button>
+              <button id="startCameraBtn" class="secondary">Bật camera</button>
+              <button id="stopCameraBtn" class="secondary" disabled>
+                Tắt camera
+              </button>
+              <button id="enrollFaceBtn" class="secondary">Đăng ký mặt</button>
+              <button id="verifyFaceBtn" class="primary">Xác thực</button>
             </div>
-            <div class="hand-settings">
-              <label>
-                Nét camera
-                <input id="cameraBrushSize" type="range" min="2" max="10" value="4" />
-              </label>
-              <label>
-                Độ mượt
-                <input id="handSmoothness" type="range" min="45" max="90" value="76" />
-              </label>
-            </div>
-            <p id="handDrawStatus" class="face-status">Chưa bật vẽ tay.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="workspace">
-      <div class="draw-card">
-        <div class="card-header">
-          <div>
-            <h2>Bảng vẽ</h2>
-            <p>Vẽ nét đen, to, rõ và nằm giữa khung để kết quả tốt hơn.</p>
-          </div>
-          <span class="badge">28x28 CNN</span>
-        </div>
-
-        <canvas id="drawingCanvas" width="280" height="280" aria-label="Drawing canvas"></canvas>
-
-        <div class="tool-row">
-          <label>
-            Độ dày nét
-            <input id="brushSize" type="range" min="6" max="28" value="16" />
-          </label>
-          <button id="clearBtn" class="secondary">Xóa</button>
-          <button id="predictBtn" class="primary">Nhận diện</button>
-        </div>
-      </div>
-
-      <div class="result-card">
-        <div class="card-header">
-          <div>
-            <h2>Kết quả</h2>
-            <p>Chatbot sẽ trả lời sau khi nhận diện ảnh.</p>
-          </div>
-        </div>
-
-        <div id="loading" class="loading hidden">Đang nhận diện...</div>
-
-        <div id="emptyState" class="empty-state">
-          <div class="empty-icon">✏️</div>
-          <p>Hãy vẽ một hình rồi bấm <b>Nhận diện</b>.</p>
-        </div>
-
-        <div id="resultBox" class="hidden">
-          <div class="prediction-main">
-            <span id="predictedLabel">---</span>
-            <small id="confidenceText">---</small>
-          </div>
-
-          <h3>Top 3 dự đoán</h3>
-          <div id="top3List" class="top3-list"></div>
-
-          <h3>Chatbot</h3>
-          <div id="chatbotReply" class="chatbot-box"></div>
-
-          <div class="visual-tools">
-            <div class="visual-panel">
-              <div class="visual-panel-header">
-                <h3>Ảnh vẽ rõ nét</h3>
-                <span class="mini-badge">Offline</span>
+            <p id="faceStatus" class="face-status">
+              Chưa bật camera khuôn mặt.
+            </p>
+            <div class="hand-draw-controls">
+              <div class="tool-row">
+                <button id="startHandDrawBtn" class="secondary">Vẽ tay</button>
+                <button id="stopHandDrawBtn" class="secondary" disabled>
+                  Dừng vẽ tay
+                </button>
               </div>
-              <img id="enhancedDrawingImg" alt="Ảnh vẽ đã làm rõ nét" />
-            </div>
-
-            <div class="visual-panel">
-              <div class="visual-panel-header">
-                <h3>Ảnh tham khảo thực tế</h3>
-                <button id="generateImageBtn" class="secondary small-btn" type="button">Tạo ảnh</button>
+              <div class="hand-settings">
+                <label>
+                  Nét camera
+                  <input
+                    id="cameraBrushSize"
+                    type="range"
+                    min="2"
+                    max="10"
+                    value="4"
+                  />
+                </label>
+                <label>
+                  Độ mượt
+                  <input
+                    id="handSmoothness"
+                    type="range"
+                    min="45"
+                    max="90"
+                    value="76"
+                  />
+                </label>
               </div>
-              <div id="referencePlaceholder" class="reference-placeholder">Chưa tạo ảnh tham khảo.</div>
-              <img id="referenceImage" class="hidden" alt="Ảnh tham khảo thực tế" />
-              <p id="referenceStatus" class="reference-status"></p>
+              <p id="handDrawStatus" class="face-status">Chưa bật vẽ tay.</p>
             </div>
           </div>
         </div>
-      </div>
-    </section>
-  </main>
+      </section>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="/static/app.js"></script>
-</body>
+      <section class="workspace">
+        <div class="draw-card">
+          <div class="card-header">
+            <div>
+              <h2>Bảng vẽ</h2>
+              <p>Vẽ nét đen, to, rõ và nằm giữa khung để kết quả tốt hơn.</p>
+            </div>
+            <span class="badge">28x28 CNN</span>
+          </div>
+
+          <canvas
+            id="drawingCanvas"
+            width="280"
+            height="280"
+            aria-label="Drawing canvas"
+          ></canvas>
+
+          <div class="tool-row">
+            <label>
+              Độ dày nét
+              <input id="brushSize" type="range" min="6" max="28" value="16" />
+            </label>
+            <button id="clearBtn" class="secondary">Xóa</button>
+            <button id="predictBtn" class="primary">Nhận diện</button>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="card-header">
+            <div>
+              <h2>Kết quả</h2>
+              <p>Chatbot sẽ trả lời sau khi nhận diện ảnh.</p>
+            </div>
+          </div>
+
+          <div id="loading" class="loading hidden">Đang nhận diện...</div>
+
+          <div id="emptyState" class="empty-state">
+            <div class="empty-icon">✏️</div>
+            <p>Hãy vẽ một hình rồi bấm <b>Nhận diện</b>.</p>
+          </div>
+
+          <div id="resultBox" class="hidden">
+            <div class="prediction-main">
+              <span id="predictedLabel">---</span>
+              <small id="confidenceText">---</small>
+            </div>
+
+            <h3>Top 3 dự đoán</h3>
+            <div id="top3List" class="top3-list"></div>
+
+            <h3>Chatbot</h3>
+            <div id="chatbotReply" class="chatbot-box"></div>
+
+            <div class="visual-tools">
+              <div class="visual-panel">
+                <div class="visual-panel-header">
+                  <h3>Ảnh vẽ rõ nét</h3>
+                  <span class="mini-badge">Offline</span>
+                </div>
+                <img id="enhancedDrawingImg" alt="Ảnh vẽ đã làm rõ nét" />
+              </div>
+
+              <div class="visual-panel">
+                <div class="visual-panel-header">
+                  <h3>Ảnh tham khảo thực tế</h3>
+                  <button
+                    id="generateImageBtn"
+                    class="secondary small-btn"
+                    type="button"
+                  >
+                    Tạo ảnh
+                  </button>
+                </div>
+                <div id="referencePlaceholder" class="reference-placeholder">
+                  Chưa tạo ảnh tham khảo.
+                </div>
+                <img
+                  id="referenceImage"
+                  class="hidden"
+                  alt="Ảnh tham khảo thực tế"
+                />
+                <p id="referenceStatus" class="reference-status"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="samples-card"
+        style="
+          background: #fff;
+          border: 1px solid #e2e8f0;
+          border-radius: 14px;
+          padding: 18px;
+          margin-top: 18px;
+        "
+      >
+        <h2 style="margin: 0 0 4px">🖼️ Tự sinh hình minh hoạ &amp; dự đoán</h2>
+        <p style="color: #64748b; margin: 0 0 12px">
+          Sinh ảnh từ dữ liệu QuickDraw: hình mẫu mỗi lớp, dự đoán 1 hình, và
+          lưới nhiều dự đoán.
+        </p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button id="genGridBtn" class="secondary">Hình mẫu mỗi lớp</button>
+          <button id="genPredBtn" class="secondary">Dự đoán 1 hình</button>
+          <button id="genMultiBtn" class="secondary">Lưới nhiều dự đoán</button>
+        </div>
+        <p id="samplesStatus" class="face-status" style="margin-top: 10px">
+          Bấm một nút để tự sinh ảnh (lần đầu có thể tải dữ liệu, hơi lâu).
+        </p>
+        <img
+          id="samplesImage"
+          alt="Ảnh tự sinh"
+          style="
+            max-width: 100%;
+            margin-top: 10px;
+            border-radius: 8px;
+            display: none;
+          "
+        />
+      </section>
+    </main>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+      crossorigin="anonymous"
+    ></script>
+    <script src="/static/app.js"></script>
+  </body>
 </html>

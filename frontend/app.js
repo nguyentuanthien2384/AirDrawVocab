@@ -56,7 +56,9 @@ const recognizedCard = document.getElementById("recognizedCard");
 const recognizedLabel = document.getElementById("recognizedLabel");
 const recognizedConfidence = document.getElementById("recognizedConfidence");
 const recognizedImage = document.getElementById("recognizedImage");
-const cameraPredictionOverlay = document.getElementById("cameraPredictionOverlay");
+const cameraPredictionOverlay = document.getElementById(
+  "cameraPredictionOverlay",
+);
 const cameraPredictionLabel = document.getElementById("cameraPredictionLabel");
 const cameraObjectImage = document.getElementById("cameraObjectImage");
 let faceStream = null;
@@ -144,12 +146,25 @@ const GUIDE_DRAWERS = {
     g.line(0.56, 0.38, 0.72, 0.38);
   },
   bowtie: (g) => {
-    g.polygon([[0.18, 0.35], [0.45, 0.5], [0.18, 0.65]]);
-    g.polygon([[0.82, 0.35], [0.55, 0.5], [0.82, 0.65]]);
+    g.polygon([
+      [0.18, 0.35],
+      [0.45, 0.5],
+      [0.18, 0.65],
+    ]);
+    g.polygon([
+      [0.82, 0.35],
+      [0.55, 0.5],
+      [0.82, 0.65],
+    ]);
     g.rect(0.45, 0.42, 0.1, 0.16);
   },
   diamond: (g) => {
-    g.polygon([[0.5, 0.15], [0.78, 0.48], [0.5, 0.85], [0.22, 0.48]]);
+    g.polygon([
+      [0.5, 0.15],
+      [0.78, 0.48],
+      [0.5, 0.85],
+      [0.22, 0.48],
+    ]);
     g.line(0.22, 0.48, 0.78, 0.48);
   },
   dog: (g) => {
@@ -178,7 +193,11 @@ const GUIDE_DRAWERS = {
   },
   fish: (g) => {
     g.ellipse(0.43, 0.5, 0.25, 0.16);
-    g.polygon([[0.66, 0.5], [0.84, 0.34], [0.84, 0.66]]);
+    g.polygon([
+      [0.66, 0.5],
+      [0.84, 0.34],
+      [0.84, 0.66],
+    ]);
     g.circle(0.32, 0.46, 0.025);
   },
   hat: (g) => {
@@ -191,14 +210,30 @@ const GUIDE_DRAWERS = {
     g.line(0.38, 0.76, 0.62, 0.24);
   },
   lightning: (g) => {
-    g.path([[0.6, 0.15], [0.34, 0.5], [0.5, 0.5], [0.4, 0.85], [0.72, 0.42], [0.55, 0.42]]);
+    g.path([
+      [0.6, 0.15],
+      [0.34, 0.5],
+      [0.5, 0.5],
+      [0.4, 0.85],
+      [0.72, 0.42],
+      [0.55, 0.42],
+    ]);
   },
   moon: (g) => {
     g.ellipse(0.48, 0.5, 0.24, 0.32, 0.75, Math.PI * 1.65);
     g.ellipse(0.58, 0.5, 0.18, 0.28, 0.78, Math.PI * 1.68);
   },
   pants: (g) => {
-    g.path([[0.32, 0.18], [0.68, 0.18], [0.76, 0.82], [0.56, 0.82], [0.5, 0.45], [0.44, 0.82], [0.24, 0.82], [0.32, 0.18]]);
+    g.path([
+      [0.32, 0.18],
+      [0.68, 0.18],
+      [0.76, 0.82],
+      [0.56, 0.82],
+      [0.5, 0.45],
+      [0.44, 0.82],
+      [0.24, 0.82],
+      [0.32, 0.18],
+    ]);
     g.line(0.5, 0.45, 0.5, 0.82);
   },
   scissors: (g) => {
@@ -217,12 +252,27 @@ const GUIDE_DRAWERS = {
     for (let i = 0; i < 10; i += 1) {
       const angle = -Math.PI / 2 + (i * Math.PI) / 5;
       const radius = i % 2 === 0 ? 0.32 : 0.14;
-      points.push([0.5 + Math.cos(angle) * radius, 0.52 + Math.sin(angle) * radius]);
+      points.push([
+        0.5 + Math.cos(angle) * radius,
+        0.52 + Math.sin(angle) * radius,
+      ]);
     }
     g.polygon(points);
   },
   "t-shirt": (g) => {
-    g.polygon([[0.34, 0.18], [0.43, 0.16], [0.5, 0.25], [0.57, 0.16], [0.66, 0.18], [0.82, 0.38], [0.68, 0.48], [0.68, 0.82], [0.32, 0.82], [0.32, 0.48], [0.18, 0.38]]);
+    g.polygon([
+      [0.34, 0.18],
+      [0.43, 0.16],
+      [0.5, 0.25],
+      [0.57, 0.16],
+      [0.66, 0.18],
+      [0.82, 0.38],
+      [0.68, 0.48],
+      [0.68, 0.82],
+      [0.32, 0.82],
+      [0.32, 0.48],
+      [0.18, 0.38],
+    ]);
     g.ellipse(0.5, 0.24, 0.08, 0.04, 0, Math.PI);
   },
 };
@@ -314,11 +364,17 @@ function waitForFaceVideoReady() {
 function syncHandOverlaySize() {
   const width = faceVideo.videoWidth || 640;
   const height = faceVideo.videoHeight || 480;
-  if (targetGuideCanvas.width !== width || targetGuideCanvas.height !== height) {
+  if (
+    targetGuideCanvas.width !== width ||
+    targetGuideCanvas.height !== height
+  ) {
     targetGuideCanvas.width = width;
     targetGuideCanvas.height = height;
   }
-  if (handOverlayCanvas.width !== width || handOverlayCanvas.height !== height) {
+  if (
+    handOverlayCanvas.width !== width ||
+    handOverlayCanvas.height !== height
+  ) {
     handOverlayCanvas.width = width;
     handOverlayCanvas.height = height;
   }
@@ -350,9 +406,14 @@ function createGuideApi(targetCtx, mode = "overlay") {
 
   return {
     path,
-    line: (x1, y1, x2, y2) => path([[x1, y1], [x2, y2]]),
+    line: (x1, y1, x2, y2) =>
+      path([
+        [x1, y1],
+        [x2, y2],
+      ]),
     polygon: (points) => path(points, true),
-    rect: (x, y, w, h) => targetCtx.strokeRect(px(x), py(y), w * size, h * size),
+    rect: (x, y, w, h) =>
+      targetCtx.strokeRect(px(x), py(y), w * size, h * size),
     circle: (x, y, r) => {
       targetCtx.beginPath();
       targetCtx.arc(px(x), py(y), r * size, 0, Math.PI * 2);
@@ -376,9 +437,14 @@ function renderGuideShape(label, targetCtx, mode = "overlay") {
   targetCtx.save();
   targetCtx.lineCap = "round";
   targetCtx.lineJoin = "round";
-  targetCtx.lineWidth = Math.max(3, Math.min(targetCtx.canvas.width, targetCtx.canvas.height) * 0.012);
-  targetCtx.strokeStyle = mode === "overlay" ? "rgba(255, 255, 255, 0.82)" : "#17355f";
-  targetCtx.shadowColor = mode === "overlay" ? "rgba(15, 23, 42, 0.75)" : "rgba(37, 99, 235, 0.18)";
+  targetCtx.lineWidth = Math.max(
+    3,
+    Math.min(targetCtx.canvas.width, targetCtx.canvas.height) * 0.012,
+  );
+  targetCtx.strokeStyle =
+    mode === "overlay" ? "rgba(255, 255, 255, 0.82)" : "#17355f";
+  targetCtx.shadowColor =
+    mode === "overlay" ? "rgba(15, 23, 42, 0.75)" : "rgba(37, 99, 235, 0.18)";
   targetCtx.shadowBlur = mode === "overlay" ? 6 : 3;
   drawer(createGuideApi(targetCtx, mode));
   targetCtx.restore();
@@ -386,7 +452,9 @@ function renderGuideShape(label, targetCtx, mode = "overlay") {
 
 function renderTargetGuide() {
   const label = gameState.target;
-  const showOverlay = Boolean(gameState.roundActive && label && showGuideToggle.checked);
+  const showOverlay = Boolean(
+    gameState.roundActive && label && showGuideToggle.checked,
+  );
   targetGuideCanvas.classList.toggle("hidden", !showOverlay);
   targetGuideCard.classList.toggle("hidden", !gameState.active || !label);
   targetGuideLabel.textContent = label || "---";
@@ -394,7 +462,11 @@ function renderTargetGuide() {
     ? DRAWING_HINTS[label] || `Vẽ ${label} bằng các nét đơn giản.`
     : "Bắt đầu game để xem mẫu.";
   renderGuideShape(showOverlay ? label : "", targetGuideCtx, "overlay");
-  renderGuideShape(gameState.active && label ? label : "", targetGuidePreviewCtx, "preview");
+  renderGuideShape(
+    gameState.active && label ? label : "",
+    targetGuidePreviewCtx,
+    "preview",
+  );
 }
 
 function markCanvasChanged() {
@@ -426,17 +498,25 @@ async function sendFace(mode) {
     alert("Bạn cần nhập tên người dùng trước khi đăng ký khuôn mặt.");
     return;
   }
-  faceStatus.textContent = mode === "enroll" ? "Đang đăng ký khuôn mặt..." : "Đang xác thực khuôn mặt...";
+  faceStatus.textContent =
+    mode === "enroll"
+      ? "Đang đăng ký khuôn mặt..."
+      : "Đang xác thực khuôn mặt...";
   try {
     const blob = await captureFaceBlob();
     const formData = new FormData();
     formData.append("file", blob, "face.png");
     formData.append("username", username);
-    const response = await fetch(`/face/${mode}`, { method: "POST", body: formData });
+    const response = await fetch(`/face/${mode}`, {
+      method: "POST",
+      body: formData,
+    });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.detail || "Không gọi được API khuôn mặt.");
+    if (!response.ok)
+      throw new Error(result.detail || "Không gọi được API khuôn mặt.");
     faceVerified = Boolean(result.ok);
-    faceStatus.textContent = result.message || (result.ok ? "Thành công" : "Thất bại");
+    faceStatus.textContent =
+      result.message || (result.ok ? "Thành công" : "Thất bại");
   } catch (error) {
     faceVerified = false;
     faceStatus.textContent = `Lỗi khuôn mặt: ${error.message}`;
@@ -502,11 +582,21 @@ function setHandDrawingControls(active) {
 }
 
 function clearHandOverlay() {
-  handOverlayCtx.clearRect(0, 0, handOverlayCanvas.width, handOverlayCanvas.height);
+  handOverlayCtx.clearRect(
+    0,
+    0,
+    handOverlayCanvas.width,
+    handOverlayCanvas.height,
+  );
 }
 
 function clearAirDrawingOverlay() {
-  airDrawingCtx.clearRect(0, 0, airDrawingCanvas.width, airDrawingCanvas.height);
+  airDrawingCtx.clearRect(
+    0,
+    0,
+    airDrawingCanvas.width,
+    airDrawingCanvas.height,
+  );
 }
 
 function isFingerUp(landmarks, tipIndex, pipIndex) {
@@ -548,19 +638,37 @@ function drawCameraPoint(x, y) {
   const current = { x, y };
 
   if (!lastCameraPoint) {
-    drawRoundDot(airDrawingCtx, current, airDrawingCtx.lineWidth / 2, "#22d3ee");
+    drawRoundDot(
+      airDrawingCtx,
+      current,
+      airDrawingCtx.lineWidth / 2,
+      "#22d3ee",
+    );
   } else {
     const dx = current.x - lastCameraPoint.x;
     const dy = current.y - lastCameraPoint.y;
     const distance = Math.hypot(dx, dy);
     airDrawingCtx.beginPath();
-    if (distance > Math.max(airDrawingCanvas.width, airDrawingCanvas.height) * 0.45) {
-      drawRoundDot(airDrawingCtx, current, airDrawingCtx.lineWidth / 2, "#22d3ee");
+    if (
+      distance >
+      Math.max(airDrawingCanvas.width, airDrawingCanvas.height) * 0.45
+    ) {
+      drawRoundDot(
+        airDrawingCtx,
+        current,
+        airDrawingCtx.lineWidth / 2,
+        "#22d3ee",
+      );
     } else {
       const midX = (lastCameraPoint.x + current.x) / 2;
       const midY = (lastCameraPoint.y + current.y) / 2;
       airDrawingCtx.moveTo(lastCameraPoint.x, lastCameraPoint.y);
-      airDrawingCtx.quadraticCurveTo(lastCameraPoint.x, lastCameraPoint.y, midX, midY);
+      airDrawingCtx.quadraticCurveTo(
+        lastCameraPoint.x,
+        lastCameraPoint.y,
+        midX,
+        midY,
+      );
       airDrawingCtx.stroke();
     }
   }
@@ -610,7 +718,11 @@ function handleHandResults(results) {
     return;
   }
 
-  if (window.drawConnectors && window.drawLandmarks && window.HAND_CONNECTIONS) {
+  if (
+    window.drawConnectors &&
+    window.drawLandmarks &&
+    window.HAND_CONNECTIONS
+  ) {
     window.drawConnectors(handOverlayCtx, landmarks, window.HAND_CONNECTIONS, {
       color: "#22c55e",
       lineWidth: 3,
@@ -666,7 +778,10 @@ function handleHandResults(results) {
 
   if (
     filteredHandPoint &&
-    Math.hypot(rawHandPoint.x - filteredHandPoint.x, rawHandPoint.y - filteredHandPoint.y) >
+    Math.hypot(
+      rawHandPoint.x - filteredHandPoint.x,
+      rawHandPoint.y - filteredHandPoint.y,
+    ) >
       Math.max(canvas.width, canvas.height) * 0.55
   ) {
     resetHandStroke();
@@ -678,7 +793,7 @@ function handleHandResults(results) {
     filteredHandPoint.x,
     filteredHandPoint.y,
     filteredCameraPoint.x,
-    filteredCameraPoint.y
+    filteredCameraPoint.y,
   );
   setHandStatus("Đang vẽ bằng tay.");
 }
@@ -687,11 +802,14 @@ async function ensureHandModel() {
   if (handModel) return handModel;
 
   if (!window.Hands) {
-    throw new Error("MediaPipe Hands chưa tải được. Hãy kiểm tra internet rồi tải lại trang.");
+    throw new Error(
+      "MediaPipe Hands chưa tải được. Hãy kiểm tra internet rồi tải lại trang.",
+    );
   }
 
   handModel = new window.Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
   });
   handModel.setOptions({
     maxNumHands: 1,
@@ -849,7 +967,9 @@ async function updateRecognizedPreview(result) {
 }
 
 function pickQuickDrawTarget() {
-  const candidates = QUICKDRAW_LABELS.filter((label) => label !== gameState.target);
+  const candidates = QUICKDRAW_LABELS.filter(
+    (label) => label !== gameState.target,
+  );
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
@@ -875,7 +995,9 @@ function resetDrawingForRound() {
 }
 
 async function requestCanvasPrediction(source = "canvas") {
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  const blob = await new Promise((resolve) =>
+    canvas.toBlob(resolve, "image/png"),
+  );
   const formData = new FormData();
   formData.append("file", blob, "drawing.png");
   formData.append("source", source);
@@ -968,7 +1090,9 @@ function handleRoundSuccess(result) {
   gameState.streak += 1;
   currentLabel = result.label;
   updateGameHud();
-  setQuickDrawStatus(`Great job! AI recognized ${result.label}. +${bonus} points.`);
+  setQuickDrawStatus(
+    `Great job! AI recognized ${result.label}. +${bonus} points.`,
+  );
   advanceQuickDrawRound();
 }
 
@@ -994,11 +1118,12 @@ function skipQuickDrawRound() {
 function endQuickDrawGame() {
   finishCurrentRound();
   gameState.active = false;
-  const completed = gameState.lives > 0 && gameState.level >= gameState.maxLevels;
+  const completed =
+    gameState.lives > 0 && gameState.level >= gameState.maxLevels;
   setQuickDrawStatus(
     completed
       ? `Hoàn thành! Score: ${gameState.score}.`
-      : `Game over. Score: ${gameState.score}.`
+      : `Game over. Score: ${gameState.score}.`,
   );
   setQuickDrawGuesses();
 }
@@ -1015,14 +1140,19 @@ async function predictForQuickDraw(manual = false) {
     const result = await requestCanvasPrediction("camera");
     setQuickDrawGuesses(result.top3 || []);
     updateRecognizedPreview(result);
-    const topGuess = result.label ? `${result.label} (${result.confidence_percent}%)` : "chưa rõ";
+    const topGuess = result.label
+      ? `${result.label} (${result.confidence_percent}%)`
+      : "chưa rõ";
 
     if (!gameState.roundActive) {
       setQuickDrawStatus(`AI thinks: ${topGuess}.`);
       return;
     }
 
-    if (result.label === gameState.target && Number(result.confidence || 0) >= 0.45) {
+    if (
+      result.label === gameState.target &&
+      Number(result.confidence || 0) >= 0.45
+    ) {
       handleRoundSuccess(result);
     } else if (manual) {
       setQuickDrawStatus(`AI thinks: ${topGuess}. Hãy vẽ rõ hơn hoặc thử lại.`);
@@ -1066,7 +1196,9 @@ async function predictDrawing() {
   resultBox.classList.add("hidden");
 
   try {
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/png"),
+    );
     const formData = new FormData();
     formData.append("file", blob, "drawing.png");
 
@@ -1128,7 +1260,8 @@ async function generateReferenceImage() {
       body: formData,
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.detail || "Không tạo được ảnh tham khảo.");
+    if (!response.ok)
+      throw new Error(result.detail || "Không tạo được ảnh tham khảo.");
 
     referenceImage.src = result.image;
     referenceImage.classList.remove("hidden");
@@ -1173,7 +1306,9 @@ resetCanvas();
 clearRecognizedPreview();
 renderTargetGuide();
 
-startCameraBtn.addEventListener("click", () => startFaceCamera().catch(() => {}));
+startCameraBtn.addEventListener("click", () =>
+  startFaceCamera().catch(() => {}),
+);
 stopCameraBtn.addEventListener("click", stopFaceCamera);
 showGuideToggle.addEventListener("change", renderTargetGuide);
 enrollFaceBtn.addEventListener("click", () => sendFace("enroll"));
@@ -1190,7 +1325,61 @@ clearAirDrawBtn.addEventListener("click", () => {
   setQuickDrawStatus(
     gameState.roundActive
       ? `Đã xóa nét. Tiếp tục vẽ ${gameState.target}.`
-      : "Đã xóa nét vẽ."
+      : "Đã xóa nét vẽ.",
   );
 });
 submitAirDrawBtn.addEventListener("click", () => predictForQuickDraw(true));
+
+// ===== Tự sinh hình minh hoạ & dự đoán (gọi backend /samples/*) =====
+(function () {
+  const img = document.getElementById("samplesImage");
+  const status = document.getElementById("samplesStatus");
+  if (!img || !status) return;
+  async function loadSample(endpoint, label) {
+    status.textContent = "Đang tự sinh: " + label + " ...";
+    img.style.display = "none";
+    try {
+      const res = await fetch(
+        endpoint + (endpoint.includes("?") ? "&" : "?") + "t=" + Date.now(),
+      );
+      const ctype = res.headers.get("content-type") || "";
+      if (!res.ok || !ctype.includes("image")) {
+        let msg = "Không sinh được ảnh.";
+        try {
+          const j = await res.json();
+          if (j && j.error) msg = j.error;
+        } catch (e) {}
+        status.textContent =
+          "Lỗi: " + msg + " (cần có dữ liệu QuickDraw hoặc mạng).";
+        return;
+      }
+      const blob = await res.blob();
+      img.src = URL.createObjectURL(blob);
+      img.style.display = "block";
+      status.textContent = "Đã sinh: " + label;
+    } catch (e) {
+      status.textContent = "Lỗi khi gọi máy chủ: " + e.message;
+    }
+  }
+  const g = document.getElementById("genGridBtn");
+  const p = document.getElementById("genPredBtn");
+  const m = document.getElementById("genMultiBtn");
+  if (g)
+    g.addEventListener("click", () =>
+      loadSample("/samples/grid", "hình mẫu mỗi lớp"),
+    );
+  if (p)
+    p.addEventListener("click", () =>
+      loadSample(
+        "/samples/prediction?seed=" + Math.floor(Math.random() * 9999),
+        "dự đoán 1 hình",
+      ),
+    );
+  if (m)
+    m.addEventListener("click", () =>
+      loadSample(
+        "/samples/multiple?count=15&seed=" + Math.floor(Math.random() * 9999),
+        "lưới nhiều dự đoán",
+      ),
+    );
+})();

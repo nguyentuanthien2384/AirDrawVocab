@@ -6,13 +6,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# 19 lớp từ vựng QuickDraw
-CATEGORIES = [
-    "apple", "baseball", "book", "bowtie", "diamond",
-    "dog", "door", "envelope", "eye", "fish",
-    "hat", "leaf", "lightning", "moon", "pants",
-    "scissors", "square", "star", "t-shirt",
-]
+# Danh sách lớp từ vựng QuickDraw (mở rộng) — nguồn duy nhất ở vocab_pairs.py
+# Hiện tại: 40 lớp. Thêm/bớt từ vựng -> sửa vocab_pairs.VOCAB rồi train lại.
+try:
+    from vocab_pairs import CATEGORIES as _VOCAB_CATEGORIES
+    CATEGORIES = list(_VOCAB_CATEGORIES)
+except Exception:
+    # Fallback: 19 lớp gốc nếu thiếu vocab_pairs.py
+    CATEGORIES = [
+        "apple", "baseball", "book", "bowtie", "diamond",
+        "dog", "door", "envelope", "eye", "fish",
+        "hat", "leaf", "lightning", "moon", "pants",
+        "scissors", "square", "star", "t-shirt",
+    ]
 NUM_CLASSES = len(CATEGORIES)
 
 # Chia dữ liệu cố định

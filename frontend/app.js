@@ -1,1385 +1,1065 @@
-const canvas = document.getElementById("drawingCanvas");
-const ctx = canvas.getContext("2d");
-const brushSize = document.getElementById("brushSize");
-const clearBtn = document.getElementById("clearBtn");
-const predictBtn = document.getElementById("predictBtn");
-const loading = document.getElementById("loading");
-const emptyState = document.getElementById("emptyState");
-const resultBox = document.getElementById("resultBox");
-const predictedLabel = document.getElementById("predictedLabel");
-const confidenceText = document.getElementById("confidenceText");
-const top3List = document.getElementById("top3List");
-const chatbotReply = document.getElementById("chatbotReply");
-const enhancedDrawingImg = document.getElementById("enhancedDrawingImg");
-const generateImageBtn = document.getElementById("generateImageBtn");
-const referenceImage = document.getElementById("referenceImage");
-const referencePlaceholder = document.getElementById("referencePlaceholder");
-const referenceStatus = document.getElementById("referenceStatus");
-const faceVideo = document.getElementById("faceVideo");
-const faceCanvas = document.getElementById("faceCanvas");
-const targetGuideCanvas = document.getElementById("targetGuideCanvas");
-const targetGuideCtx = targetGuideCanvas.getContext("2d");
-const airDrawingCanvas = document.getElementById("airDrawingCanvas");
-const airDrawingCtx = airDrawingCanvas.getContext("2d");
-const handOverlayCanvas = document.getElementById("handOverlayCanvas");
-const handOverlayCtx = handOverlayCanvas.getContext("2d");
-const faceUsername = document.getElementById("faceUsername");
-const startCameraBtn = document.getElementById("startCameraBtn");
-const stopCameraBtn = document.getElementById("stopCameraBtn");
-const enrollFaceBtn = document.getElementById("enrollFaceBtn");
-const verifyFaceBtn = document.getElementById("verifyFaceBtn");
-const faceStatus = document.getElementById("faceStatus");
-const startHandDrawBtn = document.getElementById("startHandDrawBtn");
-const stopHandDrawBtn = document.getElementById("stopHandDrawBtn");
-const handDrawStatus = document.getElementById("handDrawStatus");
-const cameraBrushSize = document.getElementById("cameraBrushSize");
-const handSmoothness = document.getElementById("handSmoothness");
-const gameTarget = document.getElementById("gameTarget");
-const gameTime = document.getElementById("gameTime");
-const gameLevel = document.getElementById("gameLevel");
-const gameLives = document.getElementById("gameLives");
-const gameScore = document.getElementById("gameScore");
-const gameStreak = document.getElementById("gameStreak");
-const startQuickDrawBtn = document.getElementById("startQuickDrawBtn");
-const skipRoundBtn = document.getElementById("skipRoundBtn");
-const clearAirDrawBtn = document.getElementById("clearAirDrawBtn");
-const submitAirDrawBtn = document.getElementById("submitAirDrawBtn");
-const showGuideToggle = document.getElementById("showGuideToggle");
-const quickDrawStatus = document.getElementById("quickDrawStatus");
-const quickDrawGuesses = document.getElementById("quickDrawGuesses");
-const targetGuideCard = document.getElementById("targetGuideCard");
-const targetGuideLabel = document.getElementById("targetGuideLabel");
-const targetGuideHint = document.getElementById("targetGuideHint");
-const targetGuidePreview = document.getElementById("targetGuidePreview");
-const targetGuidePreviewCtx = targetGuidePreview.getContext("2d");
-const recognizedCard = document.getElementById("recognizedCard");
-const recognizedLabel = document.getElementById("recognizedLabel");
-const recognizedConfidence = document.getElementById("recognizedConfidence");
-const recognizedImage = document.getElementById("recognizedImage");
-const cameraPredictionOverlay = document.getElementById(
-  "cameraPredictionOverlay",
-);
-const cameraPredictionLabel = document.getElementById("cameraPredictionLabel");
-const cameraObjectImage = document.getElementById("cameraObjectImage");
-let faceStream = null;
-let faceVerified = false;
+const $ = (selector) => document.querySelector(selector);
+const app = $("#app");
 
-let isDrawing = false;
-let hasDrawn = false;
-let currentLabel = "";
-let handModel = null;
-let handDrawingActive = false;
-let handLoopRunning = false;
-let lastHandPoint = null;
-let lastCameraPoint = null;
-let filteredHandPoint = null;
-let filteredCameraPoint = null;
-let lastHandClearAt = 0;
-let lastHandStatus = "";
-let lastDrawingGestureAt = 0;
-let gameTimerId = null;
-let gameGuessTimerId = null;
-let gamePredictionInFlight = false;
-let lastPreviewLabel = "";
-const referenceImageCache = new Map();
-const referenceImageRequests = new Map();
-
-const QUICKDRAW_LABELS = [
-  "apple",
-  "baseball",
-  "book",
-  "bowtie",
-  "diamond",
-  "dog",
-  "door",
-  "envelope",
-  "eye",
-  "fish",
-  "hat",
-  "leaf",
-  "lightning",
-  "moon",
-  "pants",
-  "scissors",
-  "square",
-  "star",
-  "t-shirt",
-];
-
-const DRAWING_HINTS = {
-  apple: "Vẽ vòng tròn, thêm cuống và lá nhỏ phía trên.",
-  baseball: "Vẽ vòng tròn lớn, thêm 2 đường cong khâu bóng ở hai bên.",
-  book: "Vẽ hình chữ nhật, kẻ gáy sách ở giữa.",
-  bowtie: "Vẽ 2 tam giác chạm nhau, thêm nút nhỏ ở giữa.",
-  diamond: "Vẽ hình thoi: đỉnh trên, đỉnh dưới và hai góc ngang.",
-  dog: "Vẽ đầu tròn, 2 tai, mắt và mũi đơn giản.",
-  door: "Vẽ hình chữ nhật đứng, thêm tay nắm tròn.",
-  envelope: "Vẽ hình chữ nhật ngang, thêm nét chữ V như phong bì.",
-  eye: "Vẽ oval nằm ngang, thêm tròng mắt và con ngươi.",
-  fish: "Vẽ thân oval, đuôi tam giác và mắt nhỏ.",
-  hat: "Vẽ nửa vòng tròn của mũ, thêm vành ngang phía dưới.",
-  leaf: "Vẽ oval nhọn, thêm gân lá ở giữa.",
-  lightning: "Vẽ đường zigzag nhọn từ trên xuống.",
-  moon: "Vẽ trăng lưỡi liềm bằng 2 đường cong.",
-  pants: "Vẽ cạp quần và 2 ống quần tách nhau.",
-  scissors: "Vẽ chữ X trước, thêm 2 vòng tròn tay cầm ở một bên.",
-  square: "Vẽ 4 cạnh đều, khép kín thành hình vuông.",
-  star: "Vẽ 5 đỉnh nhọn nối liên tục.",
-  "t-shirt": "Vẽ thân áo, 2 tay áo và cổ áo.",
-};
-
-const GUIDE_DRAWERS = {
-  apple: (g) => {
-    g.ellipse(0.5, 0.55, 0.22, 0.25);
-    g.line(0.5, 0.3, 0.5, 0.2);
-    g.ellipse(0.6, 0.24, 0.09, 0.04);
-  },
-  baseball: (g) => {
-    g.circle(0.5, 0.5, 0.28);
-    g.ellipse(0.34, 0.5, 0.1, 0.28, -1.2, 1.2);
-    g.ellipse(0.66, 0.5, 0.1, 0.28, 1.9, 4.4);
-  },
-  book: (g) => {
-    g.rect(0.22, 0.28, 0.56, 0.44);
-    g.line(0.5, 0.28, 0.5, 0.72);
-    g.line(0.28, 0.38, 0.44, 0.38);
-    g.line(0.56, 0.38, 0.72, 0.38);
-  },
-  bowtie: (g) => {
-    g.polygon([
-      [0.18, 0.35],
-      [0.45, 0.5],
-      [0.18, 0.65],
-    ]);
-    g.polygon([
-      [0.82, 0.35],
-      [0.55, 0.5],
-      [0.82, 0.65],
-    ]);
-    g.rect(0.45, 0.42, 0.1, 0.16);
-  },
-  diamond: (g) => {
-    g.polygon([
-      [0.5, 0.15],
-      [0.78, 0.48],
-      [0.5, 0.85],
-      [0.22, 0.48],
-    ]);
-    g.line(0.22, 0.48, 0.78, 0.48);
-  },
-  dog: (g) => {
-    g.circle(0.5, 0.5, 0.24);
-    g.ellipse(0.3, 0.42, 0.09, 0.16);
-    g.ellipse(0.7, 0.42, 0.09, 0.16);
-    g.circle(0.42, 0.48, 0.025);
-    g.circle(0.58, 0.48, 0.025);
-    g.circle(0.5, 0.57, 0.04);
-  },
-  door: (g) => {
-    g.rect(0.32, 0.18, 0.36, 0.64);
-    g.circle(0.6, 0.5, 0.025);
-  },
-  envelope: (g) => {
-    g.rect(0.18, 0.33, 0.64, 0.34);
-    g.line(0.18, 0.33, 0.5, 0.55);
-    g.line(0.82, 0.33, 0.5, 0.55);
-    g.line(0.18, 0.67, 0.42, 0.5);
-    g.line(0.82, 0.67, 0.58, 0.5);
-  },
-  eye: (g) => {
-    g.ellipse(0.5, 0.5, 0.34, 0.15);
-    g.circle(0.5, 0.5, 0.1);
-    g.circle(0.5, 0.5, 0.04);
-  },
-  fish: (g) => {
-    g.ellipse(0.43, 0.5, 0.25, 0.16);
-    g.polygon([
-      [0.66, 0.5],
-      [0.84, 0.34],
-      [0.84, 0.66],
-    ]);
-    g.circle(0.32, 0.46, 0.025);
-  },
-  hat: (g) => {
-    g.ellipse(0.46, 0.55, 0.24, 0.16, Math.PI, Math.PI * 2);
-    g.line(0.2, 0.58, 0.8, 0.58);
-    g.line(0.28, 0.66, 0.72, 0.66);
-  },
-  leaf: (g) => {
-    g.ellipse(0.5, 0.5, 0.17, 0.32, -0.45, Math.PI * 2 - 0.45);
-    g.line(0.38, 0.76, 0.62, 0.24);
-  },
-  lightning: (g) => {
-    g.path([
-      [0.6, 0.15],
-      [0.34, 0.5],
-      [0.5, 0.5],
-      [0.4, 0.85],
-      [0.72, 0.42],
-      [0.55, 0.42],
-    ]);
-  },
-  moon: (g) => {
-    g.ellipse(0.48, 0.5, 0.24, 0.32, 0.75, Math.PI * 1.65);
-    g.ellipse(0.58, 0.5, 0.18, 0.28, 0.78, Math.PI * 1.68);
-  },
-  pants: (g) => {
-    g.path([
-      [0.32, 0.18],
-      [0.68, 0.18],
-      [0.76, 0.82],
-      [0.56, 0.82],
-      [0.5, 0.45],
-      [0.44, 0.82],
-      [0.24, 0.82],
-      [0.32, 0.18],
-    ]);
-    g.line(0.5, 0.45, 0.5, 0.82);
-  },
-  scissors: (g) => {
-    g.circle(0.3, 0.38, 0.1);
-    g.circle(0.3, 0.66, 0.1);
-    g.line(0.38, 0.52, 0.76, 0.24);
-    g.line(0.38, 0.52, 0.78, 0.8);
-    g.line(0.36, 0.43, 0.68, 0.74);
-    g.line(0.36, 0.61, 0.68, 0.3);
-  },
-  square: (g) => {
-    g.rect(0.28, 0.28, 0.44, 0.44);
-  },
-  star: (g) => {
-    const points = [];
-    for (let i = 0; i < 10; i += 1) {
-      const angle = -Math.PI / 2 + (i * Math.PI) / 5;
-      const radius = i % 2 === 0 ? 0.32 : 0.14;
-      points.push([
-        0.5 + Math.cos(angle) * radius,
-        0.52 + Math.sin(angle) * radius,
-      ]);
-    }
-    g.polygon(points);
-  },
-  "t-shirt": (g) => {
-    g.polygon([
-      [0.34, 0.18],
-      [0.43, 0.16],
-      [0.5, 0.25],
-      [0.57, 0.16],
-      [0.66, 0.18],
-      [0.82, 0.38],
-      [0.68, 0.48],
-      [0.68, 0.82],
-      [0.32, 0.82],
-      [0.32, 0.48],
-      [0.18, 0.38],
-    ]);
-    g.ellipse(0.5, 0.24, 0.08, 0.04, 0, Math.PI);
-  },
-};
-
-const gameState = {
-  active: false,
-  roundActive: false,
+const state = {
+  user: null,
+  vocab: [],
+  supportedVocab: [],
+  gamePool: [],
+  mode: "mouse",
+  running: false,
   level: 1,
-  maxLevels: 6,
-  lives: 3,
-  maxLives: 3,
   score: 0,
+  lives: 3,
   streak: 0,
-  timeLeft: 20,
-  target: "",
+  bestStreak: 0,
+  correct: 0,
+  attempts: 0,
+  roundTime: 60,
+  timeLeft: 60,
+  currentTarget: null,
+  prediction: null,
+  judge: null,
+  predictionBuffer: [],
+  consecutiveCorrect: 0,
+  hasDrawn: false,
+  startedAt: 0,
+  roundStartedAt: 0,
+  timerId: null,
+  realtimeId: null,
+  predictInFlight: false,
+  cameraStream: null,
+  hands: null,
+  handLoop: false,
+  filteredPoint: null,
+  currentStroke: null,
+  strokes: [],
+  lastPoint: null,
+  lastPalmClear: 0,
+  leaderboard: [],
+  profile: null,
+  pvpSocket: null,
+  pvpRoom: "airdraw",
+  pvpConnected: false,
+  pvpEvents: [],
+  retrainStatus: null,
+  strokeModelAvailable: false,
 };
 
-async function startFaceCamera() {
-  if (faceStream) {
-    await waitForFaceVideoReady();
-    startCameraBtn.disabled = true;
-    stopCameraBtn.disabled = false;
-    return faceStream;
-  }
+const CANVAS_W = 960;
+const CANVAS_H = 540;
+const SUCCESS_THRESHOLD_BASE = 0.68;
+const REALTIME_INTERVAL_MS = 620;
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+async function apiGet(url) {
+  const res = await fetch(url, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+async function apiPostForm(url, form) {
+  const res = await fetch(url, { method: "POST", body: form, credentials: "same-origin" });
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+async function extractError(res) {
   try {
-    faceStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-        facingMode: "user",
-      },
-      audio: false,
-    });
-    faceVideo.srcObject = faceStream;
-    await waitForFaceVideoReady();
-    faceStatus.textContent = "Camera đã bật.";
-    startCameraBtn.disabled = true;
-    stopCameraBtn.disabled = false;
-    return faceStream;
-  } catch (error) {
-    faceStatus.textContent = `Không mở được camera: ${error.message}`;
-    throw error;
+    const data = await res.json();
+    return data.detail || data.error || `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
   }
 }
 
-function stopFaceCamera() {
-  stopHandDrawing();
-  clearGameTimers();
-  gameState.active = false;
-  gameState.roundActive = false;
-  updateGameHud();
-  setQuickDrawStatus("Đã tắt camera.");
-
-  if (faceStream) {
-    faceStream.getTracks().forEach((track) => track.stop());
-    faceStream = null;
+async function boot() {
+  renderLogin("Đang kiểm tra phiên đăng nhập...");
+  try {
+    const me = await apiGet("/auth/me");
+    if (me.authenticated) {
+      state.user = me.user;
+      await loadGameData();
+      renderGameShell();
+      return;
+    }
+  } catch (err) {
+    console.warn(err);
   }
-
-  faceVideo.pause();
-  faceVideo.removeAttribute("srcObject");
-  faceVideo.srcObject = null;
-  clearHandOverlay();
-  resetHandStroke();
-  startCameraBtn.disabled = false;
-  stopCameraBtn.disabled = true;
-  faceStatus.textContent = "Camera đã tắt.";
+  renderLogin();
 }
 
-function waitForFaceVideoReady() {
-  if (faceVideo.readyState >= 2 && faceVideo.videoWidth) {
-    syncHandOverlaySize();
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    const done = () => {
-      faceVideo.removeEventListener("loadedmetadata", done);
-      faceVideo.removeEventListener("canplay", done);
-      faceVideo.play().catch(() => {});
-      syncHandOverlaySize();
-      resolve();
-    };
-    faceVideo.addEventListener("loadedmetadata", done, { once: true });
-    faceVideo.addEventListener("canplay", done, { once: true });
+function renderLogin(message = "") {
+  stopAllLoops();
+  stopCamera();
+  app.innerHTML = `
+    <main class="login-screen">
+      <section class="login-card">
+        <div class="login-logo">
+          <div class="logo-mark">AD</div>
+          <div>
+            <p class="eyebrow">Final Boss Mode</p>
+            <h1>AirDrawVocab</h1>
+          </div>
+        </div>
+        <p class="login-subtitle">Đăng nhập để vào thẳng màn chơi. Không có dashboard phụ, không có giao diện người dùng thừa ở bên cạnh.</p>
+        <form id="loginForm" class="login-form">
+          <label>Tài khoản
+            <input id="username" autocomplete="username" placeholder="VD: admin" required />
+          </label>
+          <label>Mật khẩu
+            <input id="password" type="password" autocomplete="current-password" placeholder="Tối thiểu 6 ký tự" required />
+          </label>
+          <div class="login-actions">
+            <button class="primary" id="loginBtn" type="submit">Đăng nhập</button>
+            <button class="secondary" id="registerBtn" type="button">Đăng ký</button>
+          </div>
+          <p id="loginStatus" class="status">${escapeHtml(message || "Tạo tài khoản mới nếu chưa có.")}</p>
+        </form>
+      </section>
+    </main>
+  `;
+  $("#loginForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    loginOrRegister("login");
   });
+  $("#registerBtn").addEventListener("click", () => loginOrRegister("register"));
 }
 
-function syncHandOverlaySize() {
-  const width = faceVideo.videoWidth || 640;
-  const height = faceVideo.videoHeight || 480;
-  if (
-    targetGuideCanvas.width !== width ||
-    targetGuideCanvas.height !== height
-  ) {
-    targetGuideCanvas.width = width;
-    targetGuideCanvas.height = height;
-  }
-  if (
-    handOverlayCanvas.width !== width ||
-    handOverlayCanvas.height !== height
-  ) {
-    handOverlayCanvas.width = width;
-    handOverlayCanvas.height = height;
-  }
-  if (airDrawingCanvas.width !== width || airDrawingCanvas.height !== height) {
-    airDrawingCanvas.width = width;
-    airDrawingCanvas.height = height;
-  }
-  renderTargetGuide();
-}
-
-function createGuideApi(targetCtx, mode = "overlay") {
-  const width = targetCtx.canvas.width;
-  const height = targetCtx.canvas.height;
-  const size = Math.min(width, height) * (mode === "overlay" ? 0.72 : 0.78);
-  const offsetX = (width - size) / 2;
-  const offsetY = (height - size) / 2;
-
-  const px = (x) => offsetX + x * size;
-  const py = (y) => offsetY + y * size;
-
-  function path(points, close = false) {
-    if (!points.length) return;
-    targetCtx.beginPath();
-    targetCtx.moveTo(px(points[0][0]), py(points[0][1]));
-    points.slice(1).forEach(([x, y]) => targetCtx.lineTo(px(x), py(y)));
-    if (close) targetCtx.closePath();
-    targetCtx.stroke();
-  }
-
-  return {
-    path,
-    line: (x1, y1, x2, y2) =>
-      path([
-        [x1, y1],
-        [x2, y2],
-      ]),
-    polygon: (points) => path(points, true),
-    rect: (x, y, w, h) =>
-      targetCtx.strokeRect(px(x), py(y), w * size, h * size),
-    circle: (x, y, r) => {
-      targetCtx.beginPath();
-      targetCtx.arc(px(x), py(y), r * size, 0, Math.PI * 2);
-      targetCtx.stroke();
-    },
-    ellipse: (x, y, rx, ry, start = 0, end = Math.PI * 2) => {
-      targetCtx.beginPath();
-      targetCtx.ellipse(px(x), py(y), rx * size, ry * size, 0, start, end);
-      targetCtx.stroke();
-    },
-  };
-}
-
-function renderGuideShape(label, targetCtx, mode = "overlay") {
-  targetCtx.clearRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
-  if (!label) return;
-
-  const drawer = GUIDE_DRAWERS[label];
-  if (!drawer) return;
-
-  targetCtx.save();
-  targetCtx.lineCap = "round";
-  targetCtx.lineJoin = "round";
-  targetCtx.lineWidth = Math.max(
-    3,
-    Math.min(targetCtx.canvas.width, targetCtx.canvas.height) * 0.012,
-  );
-  targetCtx.strokeStyle =
-    mode === "overlay" ? "rgba(255, 255, 255, 0.82)" : "#17355f";
-  targetCtx.shadowColor =
-    mode === "overlay" ? "rgba(15, 23, 42, 0.75)" : "rgba(37, 99, 235, 0.18)";
-  targetCtx.shadowBlur = mode === "overlay" ? 6 : 3;
-  drawer(createGuideApi(targetCtx, mode));
-  targetCtx.restore();
-}
-
-function renderTargetGuide() {
-  const label = gameState.target;
-  const showOverlay = Boolean(
-    gameState.roundActive && label && showGuideToggle.checked,
-  );
-  targetGuideCanvas.classList.toggle("hidden", !showOverlay);
-  targetGuideCard.classList.toggle("hidden", !gameState.active || !label);
-  targetGuideLabel.textContent = label || "---";
-  targetGuideHint.textContent = label
-    ? DRAWING_HINTS[label] || `Vẽ ${label} bằng các nét đơn giản.`
-    : "Bắt đầu game để xem mẫu.";
-  renderGuideShape(showOverlay ? label : "", targetGuideCtx, "overlay");
-  renderGuideShape(
-    gameState.active && label ? label : "",
-    targetGuidePreviewCtx,
-    "preview",
-  );
-}
-
-function markCanvasChanged() {
-  const hadResult = currentLabel || !resultBox.classList.contains("hidden");
-  hasDrawn = true;
-  if (hadResult) {
-    currentLabel = "";
-    resultBox.classList.add("hidden");
-    emptyState.classList.remove("hidden");
-    resetReferenceImage();
-  }
-}
-
-async function captureFaceBlob() {
-  if (!faceStream) {
-    await startFaceCamera();
-  }
-  if (!faceVideo.videoWidth) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  const ctxFace = faceCanvas.getContext("2d");
-  ctxFace.drawImage(faceVideo, 0, 0, faceCanvas.width, faceCanvas.height);
-  return new Promise((resolve) => faceCanvas.toBlob(resolve, "image/png"));
-}
-
-async function sendFace(mode) {
-  const username = faceUsername.value.trim();
-  if (mode === "enroll" && !username) {
-    alert("Bạn cần nhập tên người dùng trước khi đăng ký khuôn mặt.");
+async function loginOrRegister(action) {
+  const status = $("#loginStatus");
+  const username = $("#username").value.trim();
+  const password = $("#password").value;
+  if (!username || !password) {
+    status.textContent = "Nhập đủ tài khoản và mật khẩu.";
+    status.className = "status error";
     return;
   }
-  faceStatus.textContent =
-    mode === "enroll"
-      ? "Đang đăng ký khuôn mặt..."
-      : "Đang xác thực khuôn mặt...";
+  const form = new FormData();
+  form.append("username", username);
+  form.append("password", password);
+  status.textContent = action === "login" ? "Đang đăng nhập..." : "Đang đăng ký...";
+  status.className = "status";
   try {
-    const blob = await captureFaceBlob();
-    const formData = new FormData();
-    formData.append("file", blob, "face.png");
-    formData.append("username", username);
-    const response = await fetch(`/face/${mode}`, {
-      method: "POST",
-      body: formData,
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(result.detail || "Không gọi được API khuôn mặt.");
-    faceVerified = Boolean(result.ok);
-    faceStatus.textContent =
-      result.message || (result.ok ? "Thành công" : "Thất bại");
-  } catch (error) {
-    faceVerified = false;
-    faceStatus.textContent = `Lỗi khuôn mặt: ${error.message}`;
+    const data = await apiPostForm(`/auth/${action}`, form);
+    state.user = data.user;
+    await loadGameData();
+    renderGameShell();
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = "status error";
   }
 }
 
-function resetCanvas() {
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = Number(brushSize.value);
-  hasDrawn = false;
-  resetHandStroke();
-  clearAirDrawingOverlay();
+async function logout() {
+  disconnectPvp();
+  try { await apiPostForm("/auth/logout", new FormData()); } catch {}
+  state.user = null;
+  renderLogin("Đã đăng xuất.");
 }
 
-function getPointerPosition(event) {
-  const rect = canvas.getBoundingClientRect();
-  const clientX = event.touches ? event.touches[0].clientX : event.clientX;
-  const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+async function loadGameData() {
+  const data = await apiGet("/vocab");
+  state.vocab = data.vocab || [];
+  state.supportedVocab = state.vocab.filter((item) => item.recognition_supported);
+  state.gamePool = state.supportedVocab.length ? state.supportedVocab : state.vocab;
+  await refreshProfileAndLeaderboard();
+}
+
+async function refreshProfileAndLeaderboard() {
+  try { state.profile = await apiGet("/game/profile"); } catch { state.profile = null; }
+  try { state.leaderboard = (await apiGet("/game/leaderboard")).leaderboard || []; } catch { state.leaderboard = []; }
+}
+
+function renderGameShell() {
+  const recognitionNote = state.supportedVocab.length < state.vocab.length
+    ? `<div class="warning-note">Model hiện tại nhận diện ${state.supportedVocab.length}/${state.vocab.length} từ. Game sẽ ưu tiên các từ model đang hỗ trợ; khi bạn thay model 40 lớp, game tự mở đủ 40 từ.</div>`
+    : "";
+
+  app.innerHTML = `
+    <main class="game-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo-mark">AD</div>
+          <div><div class="brand-title">AirDrawVocab</div><div class="brand-sub">Realtime AI Drawing Game</div></div>
+        </div>
+        <div class="hud">
+          <div class="hud-card"><span>Draw</span><strong id="hudTarget">---</strong></div>
+          <div class="hud-card"><span>Score</span><strong id="hudScore">0</strong></div>
+          <div class="hud-card"><span>Time</span><strong id="hudTime">60</strong></div>
+          <div class="hud-card"><span>Level</span><strong id="hudLevel">1/${state.gamePool.length || 40}</strong></div>
+          <div class="hud-card"><span>Lives</span><strong id="hudLives">♥♥♥</strong></div>
+          <div class="hud-card"><span>Streak</span><strong id="hudStreak">0</strong></div>
+        </div>
+        <div class="user-actions">
+          <span class="user-pill">${escapeHtml(state.user?.username || "guest")}</span>
+          <button id="logoutBtn" class="secondary">Đăng xuất</button>
+        </div>
+      </header>
+
+      <section class="game-layout">
+        <section class="stage-card">
+          <div class="stage-header">
+            <div><h2>Final Boss Game Arena</h2></div>
+            <div class="mode-switch">
+              <button id="mouseModeBtn" class="secondary active">Vẽ chuột</button>
+              <button id="cameraModeBtn" class="secondary">Vẽ tay camera</button>
+            </div>
+          </div>
+
+          <div id="gameStage" class="game-stage mouse-mode">
+            <video id="cameraVideo" autoplay muted playsinline></video>
+            <canvas id="guideCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
+            <canvas id="drawCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
+            <canvas id="handCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
+            <div class="stage-overlay">
+              <div class="target-chip">Mục tiêu: <strong id="targetChip">---</strong></div>
+              <div class="ai-chip">AI thấy: <strong id="aiChip">---</strong></div>
+            </div>
+            <div id="correctFlash" class="correct-flash">Correct +Score</div>
+          </div>
+
+          <div class="controls">
+            <div class="control-row">
+              <button id="startBtn" class="primary">Bắt đầu</button>
+              <button id="clearBtn" class="secondary">Xóa nét</button>
+              <button id="skipBtn" class="secondary" disabled>Bỏ qua</button>
+              <button id="saveBtn" class="secondary" disabled>Lưu mẫu train</button>
+              <span class="spacer"></span>
+              <label class="range-wrap">AI Speed <input id="speedRange" type="range" min="450" max="1200" value="${REALTIME_INTERVAL_MS}" step="50"></label>
+            </div>
+            <div class="progress"><span id="confidenceProgress"></span></div>
+            <p id="gameStatus" class="status">Bấm Bắt đầu để chơi. AI sẽ tự nhận diện trong lúc bạn vẽ.</p>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <section class="side-card">
+            <div class="side-header"><h3>Từ cần vẽ</h3><span class="badge">40 vocab</span></div>
+            <h2 id="targetWord" class="target-word">---</h2>
+            <div id="wordMeta" class="word-meta">${recognitionNote || "Chưa bắt đầu game."}</div>
+            <button id="speakBtn" class="ghost">Đọc từ / ví dụ</button>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>Realtime AI</h3><span class="badge">Auto Judge</span></div>
+            <div id="predictionList" class="prediction-list">AI chưa có dữ liệu.</div>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>AI Judge Mode</h3><span id="gradeBadge" class="badge warn">---</span></div>
+            <div class="judge-grid">
+              <div class="judge-cell"><span>Shape</span><strong id="shapeScore">0</strong></div>
+              <div class="judge-cell"><span>Clarity</span><strong id="clarityScore">0</strong></div>
+              <div class="judge-cell"><span>Stroke</span><strong id="strokeScore">0</strong></div>
+              <div class="judge-cell"><span>Speed</span><strong id="speedScore">0</strong></div>
+            </div>
+            <p id="judgeFeedback" class="feedback">AI sẽ đánh giá khi bạn bắt đầu vẽ.</p>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>Skill Profile</h3><span class="badge">Adaptive</span></div>
+            <div id="profileBox" class="profile-grid"></div>
+            <div id="weaknessBox" class="mini-list"></div>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>Leaderboard</h3><span class="badge">SQLite</span></div>
+            <div id="leaderboardBox" class="mini-list"></div>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>PvP WebSocket</h3><span id="pvpBadge" class="badge warn">OFF</span></div>
+            <div class="pvp-controls">
+              <input id="pvpRoomInput" value="${escapeHtml(state.pvpRoom)}" placeholder="room name" />
+              <button id="pvpBtn" class="secondary" type="button">Join</button>
+            </div>
+            <div id="pvpBox" class="mini-list"><div class="mini-row"><span>Chưa vào phòng</span><small>Solo mode</small></div></div>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>Self-improving Loop</h3><span class="badge">Train</span></div>
+            <div class="pvp-controls three">
+              <button id="exportDatasetBtn" class="secondary" type="button">Export data</button>
+              <button id="trainStrokeBtn" class="secondary" type="button">Train stroke</button>
+              <button id="trainImageBtn" class="secondary" type="button">Train image</button>
+            </div>
+            <div id="retrainBox" class="mini-list"><div class="mini-row"><span>Idle</span><small>Local/Colab pipeline</small></div></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+  `;
+
+  wireGameEvents();
+  setupCanvas();
+  updateHud();
+  renderProfile();
+  renderLeaderboard();
+  renderPvp();
+  refreshRetrainStatus();
+}
+
+function wireGameEvents() {
+  $("#logoutBtn").addEventListener("click", logout);
+  $("#mouseModeBtn").addEventListener("click", () => setMode("mouse"));
+  $("#cameraModeBtn").addEventListener("click", () => setMode("camera"));
+  $("#startBtn").addEventListener("click", () => state.running ? endGame("Bạn đã kết thúc lượt chơi.") : startGame());
+  $("#clearBtn").addEventListener("click", clearDrawing);
+  $("#skipBtn").addEventListener("click", skipRound);
+  $("#saveBtn").addEventListener("click", () => saveStrokeSample(false));
+  $("#speakBtn").addEventListener("click", speakCurrentWord);
+  $("#pvpBtn").addEventListener("click", togglePvp);
+  $("#exportDatasetBtn").addEventListener("click", exportDataset);
+  $("#trainStrokeBtn").addEventListener("click", () => startRetrain("stroke"));
+  $("#trainImageBtn").addEventListener("click", () => startRetrain("image"));
+}
+
+function setupCanvas() {
+  const canvas = $("#drawCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 13;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#050505";
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (state.mode !== "mouse") return;
+    event.preventDefault();
+    beginStroke(pointerToCanvas(event));
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (state.mode !== "mouse" || !state.currentStroke) return;
+    event.preventDefault();
+    extendStroke(pointerToCanvas(event));
+  });
+  window.addEventListener("pointerup", () => endStroke());
+}
+
+function pointerToCanvas(event) {
+  const rect = $("#drawCanvas").getBoundingClientRect();
   return {
-    x: ((clientX - rect.left) / rect.width) * canvas.width,
-    y: ((clientY - rect.top) / rect.height) * canvas.height,
+    x: ((event.clientX - rect.left) / rect.width) * CANVAS_W,
+    y: ((event.clientY - rect.top) / rect.height) * CANVAS_H,
+    t: performance.now(),
   };
 }
 
-function startDrawing(event) {
-  event.preventDefault();
-  isDrawing = true;
-  markCanvasChanged();
-  const pos = getPointerPosition(event);
-  ctx.beginPath();
-  ctx.moveTo(pos.x, pos.y);
+function beginStroke(point) {
+  state.currentStroke = [point];
+  state.lastPoint = point;
+  state.hasDrawn = true;
 }
 
-function draw(event) {
-  if (!isDrawing) return;
-  event.preventDefault();
-  const pos = getPointerPosition(event);
-  ctx.lineWidth = Number(brushSize.value);
-  ctx.lineTo(pos.x, pos.y);
+function extendStroke(point) {
+  if (!state.lastPoint) {
+    beginStroke(point);
+    return;
+  }
+  drawSegment(state.lastPoint, point);
+  state.currentStroke.push(point);
+  state.lastPoint = point;
+  state.hasDrawn = true;
+}
+
+function endStroke() {
+  if (state.currentStroke && state.currentStroke.length > 0) {
+    state.strokes.push(state.currentStroke);
+  }
+  state.currentStroke = null;
+  state.lastPoint = null;
+}
+
+function drawSegment(a, b) {
+  const ctx = $("#drawCanvas").getContext("2d");
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  const mx = (a.x + b.x) / 2;
+  const my = (a.y + b.y) / 2;
+  ctx.quadraticCurveTo(a.x, a.y, mx, my);
   ctx.stroke();
 }
 
-function stopDrawing(event) {
-  if (!isDrawing) return;
-  event.preventDefault();
-  isDrawing = false;
-  ctx.closePath();
+function clearDrawing() {
+  const draw = $("#drawCanvas");
+  draw.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
+  const hand = $("#handCanvas");
+  hand.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
+  state.hasDrawn = false;
+  state.currentStroke = null;
+  state.strokes = [];
+  state.lastPoint = null;
+  state.filteredPoint = null;
+  state.predictionBuffer = [];
+  state.consecutiveCorrect = 0;
+  state.prediction = null;
+  state.judge = null;
+  updatePredictionPanel(null);
+  updateJudge(null);
+  $("#aiChip").textContent = "---";
+  $("#confidenceProgress").style.width = "0%";
 }
 
-function setHandStatus(message) {
-  if (lastHandStatus === message) return;
-  lastHandStatus = message;
-  handDrawStatus.textContent = message;
-}
-
-function setHandDrawingControls(active) {
-  startHandDrawBtn.disabled = active;
-  stopHandDrawBtn.disabled = !active;
-}
-
-function clearHandOverlay() {
-  handOverlayCtx.clearRect(
-    0,
-    0,
-    handOverlayCanvas.width,
-    handOverlayCanvas.height,
-  );
-}
-
-function clearAirDrawingOverlay() {
-  airDrawingCtx.clearRect(
-    0,
-    0,
-    airDrawingCanvas.width,
-    airDrawingCanvas.height,
-  );
-}
-
-function isFingerUp(landmarks, tipIndex, pipIndex) {
-  return landmarks[tipIndex].y < landmarks[pipIndex].y - 0.015;
-}
-
-function resetHandStroke() {
-  lastHandPoint = null;
-  lastCameraPoint = null;
-  filteredHandPoint = null;
-  filteredCameraPoint = null;
-}
-
-function smoothPoint(point, previous) {
-  if (!previous) return point;
-  const keepPrevious = Number(handSmoothness.value || 76) / 100;
-  const keepCurrent = 1 - keepPrevious;
-  return {
-    x: previous.x * keepPrevious + point.x * keepCurrent,
-    y: previous.y * keepPrevious + point.y * keepCurrent,
-  };
-}
-
-function drawRoundDot(targetCtx, point, radius, color) {
-  targetCtx.beginPath();
-  targetCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-  targetCtx.fillStyle = color;
-  targetCtx.fill();
-}
-
-function drawCameraPoint(x, y) {
-  airDrawingCtx.lineCap = "round";
-  airDrawingCtx.lineJoin = "round";
-  airDrawingCtx.strokeStyle = "#22d3ee";
-  airDrawingCtx.fillStyle = "#22d3ee";
-  airDrawingCtx.lineWidth = Number(cameraBrushSize.value || 4);
-  airDrawingCtx.shadowColor = "rgba(34, 211, 238, 0.35)";
-  airDrawingCtx.shadowBlur = 2;
-  const current = { x, y };
-
-  if (!lastCameraPoint) {
-    drawRoundDot(
-      airDrawingCtx,
-      current,
-      airDrawingCtx.lineWidth / 2,
-      "#22d3ee",
-    );
+async function setMode(mode) {
+  state.mode = mode;
+  const stage = $("#gameStage");
+  stage.classList.toggle("camera-mode", mode === "camera");
+  stage.classList.toggle("mouse-mode", mode === "mouse");
+  $("#mouseModeBtn").classList.toggle("active", mode === "mouse");
+  $("#cameraModeBtn").classList.toggle("active", mode === "camera");
+  if (mode === "camera") {
+    await startCamera();
+    setStatus("Camera mode: dùng ngón trỏ để vẽ, mở cả bàn tay để xóa nhanh.", "ok");
   } else {
-    const dx = current.x - lastCameraPoint.x;
-    const dy = current.y - lastCameraPoint.y;
-    const distance = Math.hypot(dx, dy);
-    airDrawingCtx.beginPath();
-    if (
-      distance >
-      Math.max(airDrawingCanvas.width, airDrawingCanvas.height) * 0.45
-    ) {
-      drawRoundDot(
-        airDrawingCtx,
-        current,
-        airDrawingCtx.lineWidth / 2,
-        "#22d3ee",
-      );
-    } else {
-      const midX = (lastCameraPoint.x + current.x) / 2;
-      const midY = (lastCameraPoint.y + current.y) / 2;
-      airDrawingCtx.moveTo(lastCameraPoint.x, lastCameraPoint.y);
-      airDrawingCtx.quadraticCurveTo(
-        lastCameraPoint.x,
-        lastCameraPoint.y,
-        midX,
-        midY,
-      );
-      airDrawingCtx.stroke();
-    }
+    stopCamera();
+    setStatus("Mouse mode: vẽ trực tiếp trên khung trắng.");
   }
-
-  airDrawingCtx.shadowBlur = 0;
-  lastCameraPoint = current;
 }
 
-function drawHandPoint(x, y, cameraX, cameraY) {
-  markCanvasChanged();
-  ctx.lineWidth = Math.max(10, Number(brushSize.value));
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#000000";
-  const current = { x, y };
+function shuffle(items) {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
-  if (!lastHandPoint) {
-    drawRoundDot(ctx, current, ctx.lineWidth / 2, "#000000");
+async function startGame() {
+  if (!state.gamePool.length) {
+    setStatus("Chưa tải được từ vựng.", "error");
+    return;
+  }
+  state.running = true;
+  state.level = 1;
+  state.score = 0;
+  state.lives = 3;
+  state.streak = 0;
+  state.bestStreak = 0;
+  state.correct = 0;
+  state.attempts = 0;
+  state.startedAt = Date.now();
+  state.gamePool = shuffle(state.supportedVocab.length ? state.supportedVocab : state.vocab);
+  $("#startBtn").textContent = "Kết thúc";
+  $("#skipBtn").disabled = false;
+  $("#saveBtn").disabled = false;
+  nextRound();
+  startGameTimer();
+  startRealtimeAI();
+  if (state.mode === "camera") await startCamera();
+  setStatus("Final Boss Mode đang chạy: AI tự đoán real-time và tự qua màn khi đúng.", "ok");
+}
+
+function nextRound() {
+  if (!state.running) return;
+  if (state.level > state.gamePool.length) {
+    endGame("Hoàn thành toàn bộ vòng chơi.");
+    return;
+  }
+  clearDrawing();
+  state.currentTarget = state.gamePool[(state.level - 1) % state.gamePool.length];
+  state.roundTime = Math.max(35, 60 - Math.min(state.streak, 10) * 2);
+  state.timeLeft = state.roundTime;
+  state.roundStartedAt = Date.now();
+  drawGuide(state.currentTarget.label);
+  updateTargetPanel();
+  updateHud();
+}
+
+function startGameTimer() {
+  clearInterval(state.timerId);
+  state.timerId = setInterval(() => {
+    if (!state.running) return;
+    state.timeLeft -= 1;
+    if (state.timeLeft <= 0) {
+      failRound("Hết giờ.");
+    }
+    updateHud();
+  }, 1000);
+}
+
+function startRealtimeAI() {
+  clearInterval(state.realtimeId);
+  const speed = () => Number($("#speedRange")?.value || REALTIME_INTERVAL_MS);
+  const tick = async () => {
+    if (!state.running || !state.currentTarget || !state.hasDrawn || state.predictInFlight) return;
+    await realtimePredict();
+  };
+  state.realtimeId = setInterval(tick, speed());
+  $("#speedRange").addEventListener("change", () => {
+    clearInterval(state.realtimeId);
+    state.realtimeId = setInterval(tick, speed());
+  });
+}
+
+async function realtimePredict() {
+  state.predictInFlight = true;
+  try {
+    const blob = await captureDrawingBlob();
+    const form = new FormData();
+    form.append("file", blob, "drawing.png");
+    form.append("target", state.currentTarget.label);
+    form.append("source", state.mode === "camera" ? "camera" : "mouse");
+    form.append("stroke_count", String(countStrokePoints()));
+    form.append("elapsed_ms", String(Date.now() - state.roundStartedAt));
+    let data = await apiPostForm("/predict_godmode", form);
+    const strokeData = await tryStrokePrediction();
+    if (strokeData?.available && strokeData.confidence > (data.confidence || 0)) {
+      data = {
+        ...data,
+        label: strokeData.label,
+        confidence: strokeData.confidence,
+        confidence_percent: Math.round(strokeData.confidence * 10000) / 100,
+        top5: strokeData.top5,
+        is_correct: strokeData.is_correct,
+        ai_source: "stroke-sequence",
+      };
+    } else {
+      data.ai_source = "image-cnn";
+    }
+    state.prediction = data;
+    state.judge = data.judge;
+    updatePredictionPanel(data);
+    updateJudge(data.judge);
+    broadcastPvp({ type: "prediction", label: data.label, confidence: data.confidence, target: state.currentTarget?.label, score: state.score });
+    handleRealtimeDecision(data);
+  } catch (err) {
+    setStatus(err.message, "error");
+  } finally {
+    state.predictInFlight = false;
+  }
+}
+
+function captureDrawingBlob() {
+  return new Promise((resolve) => {
+    const src = $("#drawCanvas");
+    const temp = document.createElement("canvas");
+    temp.width = CANVAS_W;
+    temp.height = CANVAS_H;
+    const ctx = temp.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.drawImage(src, 0, 0);
+    temp.toBlob((blob) => resolve(blob), "image/png");
+  });
+}
+
+function handleRealtimeDecision(data) {
+  const conf = Number(data.confidence || 0);
+  const target = state.currentTarget?.label;
+  $("#aiChip").textContent = `${data.label} ${(conf * 100).toFixed(0)}%`;
+  $("#confidenceProgress").style.width = `${Math.round(conf * 100)}%`;
+  state.predictionBuffer.push({ label: data.label, confidence: conf });
+  if (state.predictionBuffer.length > 6) state.predictionBuffer.shift();
+  const threshold = Math.max(0.58, SUCCESS_THRESHOLD_BASE - Math.min(state.streak, 8) * 0.01);
+  if (data.label === target && conf >= threshold) {
+    state.consecutiveCorrect += 1;
   } else {
-    const dx = current.x - lastHandPoint.x;
-    const dy = current.y - lastHandPoint.y;
-    const distance = Math.hypot(dx, dy);
-    ctx.beginPath();
-    if (distance > Math.max(canvas.width, canvas.height) * 0.45) {
-      drawRoundDot(ctx, current, ctx.lineWidth / 2, "#000000");
-    } else {
-      const midX = (lastHandPoint.x + current.x) / 2;
-      const midY = (lastHandPoint.y + current.y) / 2;
-      ctx.moveTo(lastHandPoint.x, lastHandPoint.y);
-      ctx.quadraticCurveTo(lastHandPoint.x, lastHandPoint.y, midX, midY);
-      ctx.stroke();
-    }
+    state.consecutiveCorrect = Math.max(0, state.consecutiveCorrect - 1);
   }
-
-  lastHandPoint = current;
-  drawCameraPoint(cameraX, cameraY);
+  if (state.consecutiveCorrect >= 2) passRound(conf);
 }
 
-function handleHandResults(results) {
-  syncHandOverlaySize();
-  clearHandOverlay();
+function passRound(confidence) {
+  if (!state.running) return;
+  state.attempts += 1;
+  state.correct += 1;
+  const timeBonus = Math.max(0, state.timeLeft);
+  const streakBonus = state.streak * 3;
+  const confidenceBonus = Math.round(confidence * 20);
+  const gained = 20 + timeBonus + streakBonus + confidenceBonus;
+  state.score += gained;
+  state.streak += 1;
+  state.bestStreak = Math.max(state.bestStreak, state.streak);
+  state.consecutiveCorrect = 0;
+  showCorrectFlash(`Correct +${gained}`);
+  broadcastPvp({ type: "score", score: state.score, target: state.currentTarget?.label, message: `Correct +${gained}` });
+  saveStrokeSample(true);
+  setTimeout(() => {
+    state.level += 1;
+    nextRound();
+  }, 850);
+  updateHud();
+}
 
-  const landmarks = results.multiHandLandmarks && results.multiHandLandmarks[0];
-  if (!landmarks) {
-    resetHandStroke();
-    setHandStatus("Đang tìm bàn tay...");
-    return;
+function failRound(reason) {
+  state.attempts += 1;
+  state.streak = 0;
+  state.lives -= 1;
+  saveStrokeSample(false);
+  if (state.lives <= 0) {
+    endGame(`${reason} Hết mạng.`);
+  } else {
+    setStatus(`${reason} Mất 1 mạng, chuyển từ tiếp theo.`, "error");
+    state.level += 1;
+    nextRound();
   }
+}
 
-  if (
-    window.drawConnectors &&
-    window.drawLandmarks &&
-    window.HAND_CONNECTIONS
-  ) {
-    window.drawConnectors(handOverlayCtx, landmarks, window.HAND_CONNECTIONS, {
-      color: "#22c55e",
-      lineWidth: 3,
-    });
-    window.drawLandmarks(handOverlayCtx, landmarks, {
-      color: "#38bdf8",
-      lineWidth: 1,
-      radius: 3,
-    });
-  }
+function skipRound() {
+  if (!state.running) return;
+  failRound("Bạn đã bỏ qua.");
+}
 
-  const indexUp = isFingerUp(landmarks, 8, 6);
-  const middleUp = isFingerUp(landmarks, 12, 10);
-  const ringUp = isFingerUp(landmarks, 16, 14);
-  const pinkyUp = isFingerUp(landmarks, 20, 18);
-  const openPalm = indexUp && middleUp && ringUp && pinkyUp;
-  const drawingGesture = indexUp && !middleUp;
-  const now = Date.now();
+async function endGame(message) {
+  if (!state.running) return;
+  state.running = false;
+  stopAllLoops();
+  $("#startBtn").textContent = "Bắt đầu";
+  $("#skipBtn").disabled = true;
+  const duration = Math.round((Date.now() - state.startedAt) / 1000);
+  const accuracy = state.attempts ? (state.correct / state.attempts) * 100 : 0;
+  const form = new FormData();
+  form.append("score", String(state.score));
+  form.append("level", String(state.level));
+  form.append("streak", String(state.bestStreak));
+  form.append("accuracy", String(accuracy.toFixed(1)));
+  form.append("duration_seconds", String(duration));
+  form.append("mode", state.mode);
+  try { await apiPostForm("/game/session", form); } catch (err) { console.warn(err); }
+  await refreshProfileAndLeaderboard();
+  renderProfile();
+  renderLeaderboard();
+  setStatus(`${message} Score: ${state.score}. Accuracy: ${accuracy.toFixed(1)}%.`, "ok");
+}
 
-  if (openPalm) {
-    resetHandStroke();
-    if (Date.now() - lastHandClearAt > 1200) {
-      resetCanvas();
-      currentLabel = "";
-      emptyState.classList.remove("hidden");
-      resultBox.classList.add("hidden");
-      resetReferenceImage();
-      lastHandClearAt = Date.now();
-    }
-    setHandStatus("Đã xóa bảng vẽ.");
-    return;
-  }
+function stopAllLoops() {
+  clearInterval(state.timerId);
+  clearInterval(state.realtimeId);
+  state.timerId = null;
+  state.realtimeId = null;
+}
 
-  if (!drawingGesture) {
-    if (now - lastDrawingGestureAt > 220) {
-      resetHandStroke();
-    }
-    setHandStatus("Sẵn sàng bắt nét ngón trỏ.");
-    return;
-  }
+function updateHud() {
+  const target = state.currentTarget?.label || "---";
+  $("#hudTarget").textContent = target;
+  $("#targetChip").textContent = target;
+  $("#hudScore").textContent = state.score;
+  $("#hudTime").textContent = state.timeLeft;
+  $("#hudLevel").textContent = `${state.level}/${state.gamePool.length || 40}`;
+  $("#hudLives").textContent = "♥".repeat(Math.max(0, state.lives)) || "0";
+  $("#hudStreak").textContent = state.streak;
+}
 
-  lastDrawingGestureAt = now;
-
-  const tip = landmarks[8];
-  const rawHandPoint = {
-    x: (1 - tip.x) * canvas.width,
-    y: tip.y * canvas.height,
+function getIllustrationSVG(label) {
+  const S = (paths, extra = "") => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#55e6a5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" ${extra}>${paths}</svg>`;
+  const map = {
+    apple:    S(`<circle cx="50" cy="58" r="26"/><path d="M50 32 Q55 20 65 18"/><path d="M50 34 Q44 24 36 26"/>`),
+    baseball: S(`<circle cx="50" cy="50" r="28"/><path d="M34 26 Q38 38 34 50 Q30 62 34 74" stroke-width="3"/><path d="M66 26 Q62 38 66 50 Q70 62 66 74" stroke-width="3"/>`),
+    book:     S(`<rect x="22" y="18" width="56" height="64" rx="3"/><line x1="50" y1="18" x2="50" y2="82"/><line x1="30" y1="32" x2="48" y2="32"/><line x1="30" y1="42" x2="48" y2="42"/><line x1="30" y1="52" x2="48" y2="52"/>`),
+    bowtie:   S(`<polygon points="20,28 50,50 20,72" fill="rgba(85,230,165,0.15)"/><polygon points="80,28 50,50 80,72" fill="rgba(85,230,165,0.15)"/><circle cx="50" cy="50" r="6" fill="#55e6a5"/>`),
+    diamond:  S(`<polygon points="50,14 84,50 50,86 16,50" fill="rgba(85,230,165,0.12)"/><line x1="16" y1="50" x2="50" y2="14"/><line x1="50" y1="14" x2="84" y2="50"/><line x1="84" y1="50" x2="50" y2="86"/><line x1="50" y1="86" x2="16" y2="50"/><line x1="16" y1="50" x2="84" y2="50"/>`),
+    dog:      S(`<circle cx="50" cy="54" r="24"/><ellipse cx="30" cy="40" rx="10" ry="14" transform="rotate(-15,30,40)"/><ellipse cx="70" cy="40" rx="10" ry="14" transform="rotate(15,70,40)"/><circle cx="43" cy="50" r="3" fill="#55e6a5"/><circle cx="57" cy="50" r="3" fill="#55e6a5"/><ellipse cx="50" cy="60" rx="7" ry="4"/>`),
+    door:     S(`<rect x="28" y="14" width="44" height="72" rx="2"/><circle cx="64" cy="52" r="3" fill="#55e6a5"/><path d="M28 86 H72"/>`),
+    envelope: S(`<rect x="14" y="28" width="72" height="48" rx="3"/><path d="M14 28 L50 58 L86 28"/>`),
+    eye:      S(`<ellipse cx="50" cy="50" rx="36" ry="22"/><circle cx="50" cy="50" r="12"/><circle cx="50" cy="50" r="6" fill="rgba(85,230,165,0.3)"/>`),
+    fish:     S(`<ellipse cx="46" cy="50" rx="24" ry="16"/><polygon points="70,50 86,36 86,64" fill="rgba(85,230,165,0.15)"/><circle cx="36" cy="46" r="3" fill="#55e6a5"/><line x1="30" y1="50" x2="58" y2="40" stroke-width="2"/>`),
+    hat:      S(`<path d="M20 70 Q50 60 80 70"/><path d="M35 70 Q36 38 50 34 Q64 38 65 70"/><rect x="15" y="68" width="70" height="8" rx="4"/>`),
+    leaf:     S(`<path d="M50 82 Q22 60 24 34 Q36 18 50 18 Q64 18 76 34 Q78 60 50 82Z" fill="rgba(85,230,165,0.15)"/><line x1="50" y1="82" x2="50" y2="22"/><line x1="50" y1="42" x2="36" y2="56" stroke-width="2"/><line x1="50" y1="54" x2="38" y2="65" stroke-width="2"/><line x1="50" y1="42" x2="64" y2="56" stroke-width="2"/><line x1="50" y1="54" x2="62" y2="65" stroke-width="2"/>`),
+    lightning: S(`<polygon points="58,12 36,52 52,52 42,88 72,44 54,44" fill="rgba(255,209,102,0.2)" stroke="#ffd166" stroke-width="3"/>`),
+    moon:     S(`<path d="M70 28 Q86 50 70 72 Q50 82 34 72 Q54 68 58 50 Q54 32 34 28 Q50 18 70 28Z" fill="rgba(85,230,165,0.15)"/>`),
+    pants:    S(`<rect x="28" y="18" width="44" height="20" rx="3"/><path d="M28 38 L28 82 L50 82 L50 56 L50 82 L72 82 L72 38"/>`),
+    scissors: S(`<line x1="50" y1="50" x2="24" y2="22"/><line x1="50" y1="50" x2="76" y2="22"/><line x1="50" y1="50" x2="28" y2="80"/><line x1="50" y1="50" x2="72" y2="80"/><circle cx="30" cy="78" r="10"/><circle cx="70" cy="78" r="10"/>`),
+    square:   S(`<rect x="18" y="18" width="64" height="64" rx="2"/>`),
+    star:     S(`<polygon points="50,12 61,37 88,37 67,56 75,82 50,64 25,82 33,56 12,37 39,37" fill="rgba(85,230,165,0.15)"/>`),
+    "t-shirt": S(`<path d="M20 22 L36 14 L50 24 L64 14 L80 22 L70 44 L60 40 L60 82 L40 82 L40 40 L30 44Z" fill="rgba(85,230,165,0.12)"/>`),
+    cat:      S(`<circle cx="50" cy="56" r="22"/><polygon points="32,36 26,14 44,28" fill="rgba(85,230,165,0.2)"/><polygon points="68,36 74,14 56,28" fill="rgba(85,230,165,0.2)"/><circle cx="43" cy="52" r="3" fill="#55e6a5"/><circle cx="57" cy="52" r="3" fill="#55e6a5"/><path d="M42 62 Q50 67 58 62"/><line x1="30" y1="58" x2="50" y2="62" stroke-width="2"/><line x1="70" y1="58" x2="50" y2="62" stroke-width="2"/>`),
+    sun:      S(`<circle cx="50" cy="50" r="18" fill="rgba(255,209,102,0.2)" stroke="#ffd166"/><line x1="50" y1="10" x2="50" y2="22" stroke="#ffd166"/><line x1="50" y1="78" x2="50" y2="90" stroke="#ffd166"/><line x1="10" y1="50" x2="22" y2="50" stroke="#ffd166"/><line x1="78" y1="50" x2="90" y2="50" stroke="#ffd166"/><line x1="22" y1="22" x2="30" y2="30" stroke="#ffd166"/><line x1="70" y1="70" x2="78" y2="78" stroke="#ffd166"/><line x1="78" y1="22" x2="70" y2="30" stroke="#ffd166"/><line x1="22" y1="78" x2="30" y2="70" stroke="#ffd166"/>`),
+    tree:     S(`<ellipse cx="50" cy="36" rx="28" ry="24" fill="rgba(85,230,165,0.15)"/><rect x="44" y="58" width="12" height="26" rx="2"/>`),
+    flower:   S(`<circle cx="50" cy="50" r="10" fill="rgba(255,209,102,0.3)" stroke="#ffd166"/><ellipse cx="50" cy="28" rx="9" ry="14" fill="rgba(85,230,165,0.2)"/><ellipse cx="50" cy="72" rx="9" ry="14" fill="rgba(85,230,165,0.2)"/><ellipse cx="28" cy="50" rx="14" ry="9" fill="rgba(85,230,165,0.2)"/><ellipse cx="72" cy="50" rx="14" ry="9" fill="rgba(85,230,165,0.2)"/><ellipse cx="34" cy="34" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(-45,34,34)"/><ellipse cx="66" cy="34" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(45,66,34)"/><ellipse cx="34" cy="66" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(45,34,66)"/><ellipse cx="66" cy="66" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(-45,66,66)"/>`),
+    cloud:    S(`<ellipse cx="40" cy="58" rx="24" ry="18"/><ellipse cx="62" cy="58" rx="20" ry="16"/><ellipse cx="50" cy="46" rx="18" ry="16"/>`),
+    umbrella: S(`<path d="M14 50 Q14 20 50 18 Q86 20 86 50Z"/><line x1="50" y1="18" x2="50" y2="76"/><path d="M50 76 Q50 86 40 86 Q30 86 30 76"/>`),
+    key:      S(`<circle cx="36" cy="42" r="16"/><circle cx="36" cy="42" r="8"/><line x1="50" y1="42" x2="86" y2="42"/><line x1="74" y1="42" x2="74" y2="54"/><line x1="84" y1="42" x2="84" y2="52"/>`),
+    cup:      S(`<path d="M26 30 L34 80 L66 80 L74 30Z"/><path d="M74 46 Q88 46 88 58 Q88 70 74 70"/>`),
+    clock:    S(`<circle cx="50" cy="50" r="34"/><line x1="50" y1="50" x2="50" y2="24" stroke-width="5"/><line x1="50" y1="50" x2="68" y2="60" stroke-width="3"/><circle cx="50" cy="50" r="3" fill="#55e6a5"/>`),
+    car:      S(`<rect x="12" y="44" width="76" height="30" rx="6"/><path d="M24 44 L32 24 L68 24 L76 44"/><circle cx="28" cy="76" r="10"/><circle cx="72" cy="76" r="10"/><rect x="36" y="28" width="14" height="14" rx="2"/><rect x="52" y="28" width="14" height="14" rx="2"/>`),
+    bicycle:  S(`<circle cx="28" cy="62" r="20"/><circle cx="72" cy="62" r="20"/><line x1="28" y1="62" x2="50" y2="32"/><line x1="72" y1="62" x2="50" y2="32"/><line x1="50" y1="32" x2="28" y2="62"/><line x1="50" y1="32" x2="50" y2="48"/><line x1="44" y1="26" x2="56" y2="26"/>`),
+    airplane: S(`<path d="M8 54 L50 36 L92 54 L74 54 L74 68 L50 62 L26 68 L26 54Z" fill="rgba(85,230,165,0.12)"/><path d="M50 36 L50 76"/><path d="M42 72 L58 72"/>`),
+    house:    S(`<polygon points="50,14 88,46 78,46 78,86 22,86 22,46 12,46" fill="rgba(85,230,165,0.12)"/><rect x="38" y="62" width="24" height="24" rx="2"/>`),
+    banana:   S(`<path d="M26 78 Q18 50 32 28 Q46 16 66 18 Q74 18 74 26 Q74 34 60 34 Q40 34 32 52 Q26 66 34 78Z" fill="rgba(255,209,102,0.2)" stroke="#ffd166"/>`),
+    "ice cream": S(`<polygon points="50,88 26,42 74,42" fill="rgba(85,230,165,0.12)"/><circle cx="50" cy="34" r="18" fill="rgba(255,120,80,0.2)" stroke="#ff7850" stroke-width="3"/><path d="M38 28 Q44 22 50 28 Q56 22 62 28" stroke="#ff7850" stroke-width="2"/>`),
+    cake:     S(`<rect x="20" y="52" width="60" height="34" rx="4" fill="rgba(85,230,165,0.12)"/><rect x="30" y="42" width="40" height="12" rx="2"/><line x1="34" y1="22" x2="34" y2="42"/><line x1="50" y1="18" x2="50" y2="42"/><line x1="66" y1="22" x2="66" y2="42"/><ellipse cx="34" cy="20" rx="4" ry="6" stroke="#ffd166"/><ellipse cx="50" cy="16" rx="4" ry="6" stroke="#ffd166"/><ellipse cx="66" cy="20" rx="4" ry="6" stroke="#ffd166"/>`),
+    candle:   S(`<rect x="38" y="42" width="24" height="46" rx="3" fill="rgba(85,230,165,0.12)"/><path d="M50 12 Q54 22 50 30 Q46 22 50 12Z" fill="rgba(255,209,102,0.4)" stroke="#ffd166"/><line x1="50" y1="30" x2="50" y2="42"/>`),
+    guitar:   S(`<path d="M50 16 Q58 16 60 24 L62 52 Q68 54 68 62 Q68 76 50 82 Q32 76 32 62 Q32 54 38 52 L40 24 Q42 16 50 16Z" fill="rgba(85,230,165,0.12)"/><circle cx="50" cy="62" r="8"/><line x1="42" y1="16" x2="58" y2="16"/>`),
+    hammer:   S(`<line x1="42" y1="50" x2="70" y2="82"/><rect x="34" y="22" width="36" height="22" rx="4" fill="rgba(85,230,165,0.15)" transform="rotate(-30,52,33)"/>`),
+    bed:      S(`<rect x="10" y="48" width="80" height="34" rx="4"/><rect x="10" y="44" width="18" height="38" rx="3"/><rect x="72" y="44" width="18" height="38" rx="3"/><ellipse cx="38" cy="48" rx="18" ry="10" fill="rgba(85,230,165,0.2)"/><ellipse cx="62" cy="48" rx="18" ry="10" fill="rgba(85,230,165,0.2)"/>`),
+    chair:    S(`<rect x="28" y="34" width="44" height="8" rx="2"/><line x1="28" y1="42" x2="24" y2="82"/><line x1="72" y1="42" x2="76" y2="82"/><line x1="32" y1="42" x2="32" y2="82"/><line x1="68" y1="42" x2="68" y2="82"/><rect x="28" y="14" width="8" height="22" rx="2"/><rect x="64" y="14" width="8" height="22" rx="2"/><line x1="28" y1="24" x2="72" y2="24"/>`,),
   };
-  const rawCameraPoint = {
-    x: tip.x * airDrawingCanvas.width,
-    y: tip.y * airDrawingCanvas.height,
-  };
-
-  if (
-    filteredHandPoint &&
-    Math.hypot(
-      rawHandPoint.x - filteredHandPoint.x,
-      rawHandPoint.y - filteredHandPoint.y,
-    ) >
-      Math.max(canvas.width, canvas.height) * 0.55
-  ) {
-    resetHandStroke();
-  }
-
-  filteredHandPoint = smoothPoint(rawHandPoint, filteredHandPoint);
-  filteredCameraPoint = smoothPoint(rawCameraPoint, filteredCameraPoint);
-  drawHandPoint(
-    filteredHandPoint.x,
-    filteredHandPoint.y,
-    filteredCameraPoint.x,
-    filteredCameraPoint.y,
-  );
-  setHandStatus("Đang vẽ bằng tay.");
+  return map[label] || S(`<text x="50" y="56" text-anchor="middle" font-size="36" fill="#55e6a5" stroke="none">${label.slice(0,2).toUpperCase()}</text>`);
 }
 
-async function ensureHandModel() {
-  if (handModel) return handModel;
-
-  if (!window.Hands) {
-    throw new Error(
-      "MediaPipe Hands chưa tải được. Hãy kiểm tra internet rồi tải lại trang.",
-    );
-  }
-
-  handModel = new window.Hands({
-    locateFile: (file) =>
-      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-  });
-  handModel.setOptions({
-    maxNumHands: 1,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.72,
-    minTrackingConfidence: 0.55,
-  });
-  handModel.onResults(handleHandResults);
-  return handModel;
+function updateTargetPanel() {
+  const item = state.currentTarget;
+  if (!item) return;
+  $("#targetWord").textContent = item.label;
+  const svg = getIllustrationSVG(item.label);
+  $("#wordMeta").innerHTML = `
+    <div class="word-illustration" title="Hình minh hoạ: ${escapeHtml(item.label)}">${svg}</div>
+    <p><b>Nghĩa:</b> ${escapeHtml(item.meaning_vi || item.label)}</p>
+    <p><b>IPA:</b> ${escapeHtml(item.ipa || "")}</p>
+    <p><b>Ví dụ:</b> ${escapeHtml(item.example_en || "")}</p>
+    <p><b>Dịch:</b> ${escapeHtml(item.example_vi || "")}</p>
+    <p><b>Gợi ý vẽ:</b> ${escapeHtml(item.drawing_hint || "Vẽ hình dạng chính rõ ràng.")}</p>
+  `;
 }
 
-async function runHandDrawingLoop() {
-  if (handLoopRunning) return;
-  handLoopRunning = true;
+function updatePredictionPanel(data) {
+  const box = $("#predictionList");
+  if (!data || !data.top5) {
+    box.textContent = "AI chưa có dữ liệu.";
+    return;
+  }
+  const source = data.ai_source ? `<div class="mini-row"><span>AI source</span><small>${escapeHtml(data.ai_source)}</small></div>` : "";
+  box.innerHTML = source + data.top5.map((p) => `
+    <div class="pred-row">
+      <div class="pred-label">${escapeHtml(p.label)}</div>
+      <div class="pred-bar"><span style="width:${Math.round(p.confidence * 100)}%"></span></div>
+      <div>${Math.round(p.confidence * 100)}%</div>
+    </div>
+  `).join("");
+}
 
-  while (handDrawingActive) {
+function updateJudge(judge) {
+  $("#gradeBadge").textContent = judge?.grade || "---";
+  $("#shapeScore").textContent = judge?.shape_score ?? 0;
+  $("#clarityScore").textContent = judge?.clarity_score ?? 0;
+  $("#strokeScore").textContent = judge?.stroke_score ?? 0;
+  $("#speedScore").textContent = judge?.speed_score ?? 0;
+  $("#judgeFeedback").textContent = judge?.feedback || "AI sẽ đánh giá khi bạn bắt đầu vẽ.";
+}
+
+function renderProfile() {
+  const profile = state.profile;
+  const stats = profile?.stats || {};
+  $("#profileBox").innerHTML = `
+    <div class="profile-item"><span>Games</span><strong>${stats.games || 0}</strong></div>
+    <div class="profile-item"><span>Best score</span><strong>${stats.best_score || 0}</strong></div>
+    <div class="profile-item"><span>Drawings</span><strong>${stats.drawings || 0}</strong></div>
+    <div class="profile-item"><span>Accuracy</span><strong>${stats.accuracy || 0}%</strong></div>
+  `;
+  const weaknesses = profile?.weaknesses || [];
+  $("#weaknessBox").innerHTML = weaknesses.length
+    ? weaknesses.map((w) => `<div class="mini-row"><span>${escapeHtml(w.target)}</span><small>${w.accuracy}% / ${w.attempts} lần</small></div>`).join("")
+    : `<div class="mini-row"><span>Chưa có dữ liệu yếu/mạnh</span><small>Chơi vài vòng để cập nhật</small></div>`;
+}
+
+function renderLeaderboard() {
+  const rows = state.leaderboard || [];
+  $("#leaderboardBox").innerHTML = rows.length
+    ? rows.map((r, i) => `<div class="mini-row"><span>#${i + 1} ${escapeHtml(r.username || "guest")}</span><small>${r.score || 0} pts</small></div>`).join("")
+    : `<div class="mini-row"><span>Chưa có bảng xếp hạng</span><small>Hãy chơi 1 lượt</small></div>`;
+}
+
+function setStatus(text, type = "") {
+  const el = $("#gameStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `status ${type}`.trim();
+}
+
+function showCorrectFlash(text) {
+  const flash = $("#correctFlash");
+  flash.textContent = text;
+  flash.classList.add("show");
+  setTimeout(() => flash.classList.remove("show"), 720);
+}
+
+function countStrokePoints() {
+  return state.strokes.reduce((sum, stroke) => sum + stroke.length, 0) + (state.currentStroke?.length || 0);
+}
+
+async function saveStrokeSample(correct = false) {
+  if (!state.currentTarget) return;
+  const form = new FormData();
+  form.append("target", state.currentTarget.label);
+  form.append("predicted", state.prediction?.label || "");
+  form.append("confidence", String(state.prediction?.confidence || 0));
+  form.append("correct", correct ? "1" : "0");
+  form.append("mode", state.mode);
+  form.append("strokes_json", JSON.stringify(state.strokes));
+  try { await apiPostForm("/game/stroke", form); } catch (err) { console.warn(err); }
+  setStatus(correct ? "Đã lưu mẫu đúng vào dataset game." : "Đã lưu mẫu vẽ vào dataset game.", correct ? "ok" : "");
+}
+
+
+async function tryStrokePrediction() {
+  if (!state.currentTarget || countStrokePoints() < 8) return null;
+  try {
+    const form = new FormData();
+    form.append("strokes_json", JSON.stringify(state.strokes.concat(state.currentStroke ? [state.currentStroke] : [])));
+    form.append("target", state.currentTarget.label);
+    const data = await apiPostForm("/predict_stroke", form);
+    state.strokeModelAvailable = Boolean(data.available);
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+function togglePvp() {
+  if (state.pvpConnected) {
+    disconnectPvp();
+    return;
+  }
+  connectPvp();
+}
+
+function connectPvp() {
+  const input = $("#pvpRoomInput");
+  state.pvpRoom = (input?.value || "airdraw").trim().toLowerCase() || "airdraw";
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${protocol}://${location.host}/ws/pvp/${encodeURIComponent(state.pvpRoom)}?username=${encodeURIComponent(state.user?.username || "guest")}`;
+  try {
+    state.pvpSocket = new WebSocket(url);
+    state.pvpSocket.onopen = () => {
+      state.pvpConnected = true;
+      renderPvp();
+      broadcastPvp({ type: "hello", score: state.score, target: state.currentTarget?.label || "" });
+    };
+    state.pvpSocket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        state.pvpEvents.unshift(data);
+        state.pvpEvents = state.pvpEvents.slice(0, 5);
+        renderPvp(data.players || []);
+      } catch {}
+    };
+    state.pvpSocket.onclose = () => {
+      state.pvpConnected = false;
+      renderPvp();
+    };
+  } catch (err) {
+    setStatus(`Không kết nối được PvP: ${err.message}`, "error");
+  }
+}
+
+function disconnectPvp() {
+  if (state.pvpSocket) state.pvpSocket.close();
+  state.pvpSocket = null;
+  state.pvpConnected = false;
+  renderPvp();
+}
+
+function broadcastPvp(payload) {
+  if (!state.pvpConnected || !state.pvpSocket || state.pvpSocket.readyState !== WebSocket.OPEN) return;
+  state.pvpSocket.send(JSON.stringify({ ...payload, score: state.score, level: state.level, ts: Date.now() }));
+}
+
+function renderPvp(players = []) {
+  const badge = $("#pvpBadge");
+  const btn = $("#pvpBtn");
+  const box = $("#pvpBox");
+  if (!badge || !btn || !box) return;
+  badge.textContent = state.pvpConnected ? "ON" : "OFF";
+  badge.className = state.pvpConnected ? "badge" : "badge warn";
+  btn.textContent = state.pvpConnected ? "Leave" : "Join";
+  const playerRows = players.length
+    ? players.map((p) => `<div class="mini-row"><span>${escapeHtml(p.username || "guest")}</span><small>${p.score || 0} pts</small></div>`).join("")
+    : `<div class="mini-row"><span>${state.pvpConnected ? "Đang chờ người chơi" : "Chưa vào phòng"}</span><small>${escapeHtml(state.pvpRoom)}</small></div>`;
+  const eventRows = state.pvpEvents.slice(0, 3).map((e) => `<div class="mini-row"><span>${escapeHtml(e.username || "system")}</span><small>${escapeHtml(e.message || e.label || e.type || "event")}</small></div>`).join("");
+  box.innerHTML = playerRows + eventRows;
+}
+
+async function exportDataset() {
+  const box = $("#retrainBox");
+  try {
+    const data = await apiGet("/dataset/export");
+    box.innerHTML = `<div class="mini-row"><span>Export OK</span><small>${data.samples} samples</small></div><div class="mini-row"><span>Download</span><small>${data.download}</small></div>`;
+  } catch (err) {
+    box.innerHTML = `<div class="mini-row"><span>Export lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function startRetrain(mode) {
+  const box = $("#retrainBox");
+  const form = new FormData();
+  form.append("mode", mode);
+  form.append("epochs", mode === "stroke" ? "8" : "5");
+  try {
+    const data = await apiPostForm("/admin/retrain/start", form);
+    box.innerHTML = `<div class="mini-row"><span>Retrain ${escapeHtml(mode)}</span><small>${data.ok ? "running" : "busy"}</small></div>`;
+    setTimeout(refreshRetrainStatus, 1200);
+  } catch (err) {
+    box.innerHTML = `<div class="mini-row"><span>Retrain lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function refreshRetrainStatus() {
+  const box = $("#retrainBox");
+  if (!box) return;
+  try {
+    const data = await apiGet("/admin/retrain/status");
+    state.retrainStatus = data;
+    box.innerHTML = `<div class="mini-row"><span>${escapeHtml(data.status || "idle")}</span><small>${escapeHtml(data.mode || "-")}</small></div><div class="mini-row"><span>${escapeHtml(data.message || "")}</span><small>${data.process_running ? "running" : "stopped"}</small></div>`;
+    if (data.process_running) setTimeout(refreshRetrainStatus, 2500);
+  } catch (err) {
+    box.innerHTML = `<div class="mini-row"><span>Status lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+function speakCurrentWord() {
+  const item = state.currentTarget;
+  if (!item || !window.speechSynthesis) return;
+  const text = `${item.label}. ${item.example_en || ""}`;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "en-US";
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+}
+
+async function startCamera() {
+  const video = $("#cameraVideo");
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("Browser không hỗ trợ camera API.", "error");
+    return;
+  }
+  if (!state.cameraStream) {
     try {
-      await handModel.send({ image: faceVideo });
-    } catch (error) {
-      handDrawingActive = false;
-      setHandDrawingControls(false);
-      setHandStatus(`Lỗi vẽ tay: ${error.message}`);
-      break;
+      state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 540 }, audio: false });
+      video.srcObject = state.cameraStream;
+      await video.play();
+    } catch (err) {
+      setStatus(`Không mở được camera: ${err.message}`, "error");
+      return;
     }
+  }
+  if (!state.hands && window.Hands) {
+    state.hands = new window.Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    state.hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.65 });
+    state.hands.onResults(onHandResults);
+  }
+  if (state.hands && !state.handLoop) {
+    state.handLoop = true;
+    handFrameLoop();
+  } else if (!window.Hands) {
+    setStatus("MediaPipe chưa tải được. Camera vẫn mở nhưng chưa tracking ngón tay.", "error");
+  }
+}
+
+function stopCamera() {
+  state.handLoop = false;
+  if (state.cameraStream) {
+    state.cameraStream.getTracks().forEach((track) => track.stop());
+    state.cameraStream = null;
+  }
+  const video = $("#cameraVideo");
+  if (video) video.srcObject = null;
+  state.filteredPoint = null;
+}
+
+async function handFrameLoop() {
+  const video = $("#cameraVideo");
+  while (state.handLoop && state.hands && video?.readyState >= 2) {
+    try { await state.hands.send({ image: video }); } catch (err) { console.warn(err); }
     await new Promise((resolve) => requestAnimationFrame(resolve));
   }
-
-  handLoopRunning = false;
-  resetHandStroke();
-  clearHandOverlay();
 }
 
-async function startHandDrawing() {
-  setHandStatus("Đang khởi động vẽ tay...");
-  try {
-    await startFaceCamera();
-    await ensureHandModel();
-    handDrawingActive = true;
-    setHandDrawingControls(true);
-    setHandStatus("Đang tìm bàn tay...");
-    runHandDrawingLoop();
-  } catch (error) {
-    handDrawingActive = false;
-    setHandDrawingControls(false);
-    setHandStatus(`Không bật được vẽ tay: ${error.message}`);
-  }
-}
-
-function stopHandDrawing() {
-  handDrawingActive = false;
-  resetHandStroke();
-  setHandDrawingControls(false);
-  setHandStatus("Đã dừng vẽ tay.");
-}
-
-function updateGameHud() {
-  gameTarget.textContent = gameState.target || "---";
-  gameTime.textContent = String(gameState.timeLeft).padStart(2, "0");
-  gameLevel.textContent = `${gameState.level}/${gameState.maxLevels}`;
-  gameLives.textContent =
-    "♥".repeat(Math.max(gameState.lives, 0)) +
-    "♡".repeat(Math.max(gameState.maxLives - gameState.lives, 0));
-  gameScore.textContent = String(gameState.score);
-  gameStreak.textContent = String(gameState.streak);
-  skipRoundBtn.disabled = !gameState.roundActive;
-  renderTargetGuide();
-}
-
-function setQuickDrawStatus(message) {
-  quickDrawStatus.textContent = message;
-}
-
-function setQuickDrawGuesses(items = []) {
-  if (!items.length) {
-    quickDrawGuesses.textContent = "AI chưa đoán.";
+function onHandResults(results) {
+  const canvas = $("#handCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  const landmarks = results.multiHandLandmarks?.[0];
+  if (!landmarks) {
+    if (state.currentStroke) endStroke();
     return;
   }
-
-  quickDrawGuesses.innerHTML = "";
-  items.slice(0, 3).forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "guess-row";
-    row.innerHTML = `
-      <span>${item.label}</span>
-      <strong>${(item.confidence * 100).toFixed(1)}%</strong>
-    `;
-    quickDrawGuesses.appendChild(row);
-  });
-}
-
-function clearRecognizedPreview() {
-  lastPreviewLabel = "";
-  recognizedLabel.textContent = "---";
-  recognizedConfidence.textContent = "Vẽ bằng ngón trỏ để hiện ảnh tương ứng.";
-  recognizedImage.removeAttribute("src");
-  cameraPredictionOverlay.classList.add("hidden");
-  cameraPredictionLabel.textContent = "---";
-  cameraObjectImage.classList.add("hidden");
-  cameraObjectImage.removeAttribute("src");
-}
-
-async function getOfflineReferenceImage(label) {
-  if (referenceImageCache.has(label)) {
-    return referenceImageCache.get(label);
-  }
-  if (referenceImageRequests.has(label)) {
-    return referenceImageRequests.get(label);
-  }
-
-  const request = (async () => {
-    const formData = new FormData();
-    formData.append("label", label);
-    const response = await fetch("/image/reference", {
-      method: "POST",
-      body: formData,
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result.detail || "Không tải được ảnh minh họa.");
-    }
-    referenceImageCache.set(label, result.image);
-    referenceImageRequests.delete(label);
-    return result.image;
-  })();
-
-  referenceImageRequests.set(label, request);
-  return request;
-}
-
-async function updateRecognizedPreview(result) {
-  if (!result || !result.label) return;
-
-  const confidence = Number(result.confidence || 0);
-  const label = result.label;
-  const percent = result.confidence_percent ?? (confidence * 100).toFixed(1);
-  const labelText = confidence < 0.25 ? `${label} ?` : label;
-
-  recognizedLabel.textContent = labelText;
-  recognizedConfidence.textContent = `Độ tin cậy: ${percent}%`;
-  cameraPredictionLabel.textContent = `${labelText} · ${percent}%`;
-  cameraPredictionOverlay.classList.remove("hidden");
-
-  if (lastPreviewLabel === label && recognizedImage.getAttribute("src")) return;
-  lastPreviewLabel = label;
-
-  try {
-    const image = await getOfflineReferenceImage(label);
-    if (lastPreviewLabel !== label) return;
-    recognizedImage.src = image;
-    cameraObjectImage.src = image;
-    cameraObjectImage.classList.remove("hidden");
-  } catch (error) {
-    recognizedConfidence.textContent = `Đã nhận diện ${label}, nhưng chưa tải được ảnh minh họa.`;
-  }
-}
-
-function pickQuickDrawTarget() {
-  const candidates = QUICKDRAW_LABELS.filter(
-    (label) => label !== gameState.target,
-  );
-  return candidates[Math.floor(Math.random() * candidates.length)];
-}
-
-function clearGameTimers() {
-  if (gameTimerId) {
-    clearInterval(gameTimerId);
-    gameTimerId = null;
-  }
-  if (gameGuessTimerId) {
-    clearInterval(gameGuessTimerId);
-    gameGuessTimerId = null;
-  }
-}
-
-function resetDrawingForRound() {
-  resetCanvas();
-  currentLabel = "";
-  setQuickDrawGuesses();
-  clearRecognizedPreview();
-  resultBox.classList.add("hidden");
-  emptyState.classList.remove("hidden");
-  resetReferenceImage();
-}
-
-async function requestCanvasPrediction(source = "canvas") {
-  const blob = await new Promise((resolve) =>
-    canvas.toBlob(resolve, "image/png"),
-  );
-  const formData = new FormData();
-  formData.append("file", blob, "drawing.png");
-  formData.append("source", source);
-
-  const response = await fetch("/predict", {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || "Không gọi được API nhận diện.");
-  }
-
-  return response.json();
-}
-
-function finishCurrentRound() {
-  gameState.roundActive = false;
-  clearGameTimers();
-  resetHandStroke();
-  updateGameHud();
-}
-
-function startRoundTimers() {
-  clearGameTimers();
-
-  gameTimerId = setInterval(() => {
-    if (!gameState.roundActive) return;
-    gameState.timeLeft -= 1;
-    updateGameHud();
-    if (gameState.timeLeft <= 0) {
-      handleRoundTimeout();
-    }
-  }, 1000);
-
-  gameGuessTimerId = setInterval(() => {
-    predictForQuickDraw(false);
-  }, 1100);
-}
-
-async function startQuickDrawRound() {
-  await startHandDrawing();
-  resetDrawingForRound();
-  gameState.target = pickQuickDrawTarget();
-  gameState.timeLeft = 20;
-  gameState.roundActive = true;
-  updateGameHud();
-  setQuickDrawStatus(`Draw ${gameState.target} in under 20 seconds.`);
-  startRoundTimers();
-}
-
-async function startQuickDrawGame() {
-  gameState.active = true;
-  gameState.roundActive = false;
-  gameState.level = 1;
-  gameState.lives = gameState.maxLives;
-  gameState.score = 0;
-  gameState.streak = 0;
-  gameState.target = "";
-  startQuickDrawBtn.textContent = "Chơi lại";
-  updateGameHud();
-  try {
-    await startQuickDrawRound();
-  } catch (error) {
-    gameState.active = false;
-    gameState.roundActive = false;
-    updateGameHud();
-    setQuickDrawStatus(`Không bắt đầu được: ${error.message}`);
-  }
-}
-
-function advanceQuickDrawRound(delayMs = 900) {
-  setTimeout(() => {
-    if (!gameState.active) return;
-    if (gameState.level >= gameState.maxLevels || gameState.lives <= 0) {
-      endQuickDrawGame();
-      return;
-    }
-    gameState.level += 1;
-    startQuickDrawRound();
-  }, delayMs);
-}
-
-function handleRoundSuccess(result) {
-  if (!gameState.roundActive) return;
-  finishCurrentRound();
-  const bonus = 100 + gameState.timeLeft * 5 + gameState.streak * 20;
-  gameState.score += bonus;
-  gameState.streak += 1;
-  currentLabel = result.label;
-  updateGameHud();
-  setQuickDrawStatus(
-    `Great job! AI recognized ${result.label}. +${bonus} points.`,
-  );
-  advanceQuickDrawRound();
-}
-
-function handleRoundTimeout() {
-  if (!gameState.roundActive) return;
-  finishCurrentRound();
-  gameState.lives -= 1;
-  gameState.streak = 0;
-  updateGameHud();
-  setQuickDrawStatus(`Time's up. The word was ${gameState.target}.`);
-  advanceQuickDrawRound();
-}
-
-function skipQuickDrawRound() {
-  if (!gameState.roundActive) return;
-  finishCurrentRound();
-  gameState.streak = 0;
-  updateGameHud();
-  setQuickDrawStatus("Try this one instead.");
-  advanceQuickDrawRound(350);
-}
-
-function endQuickDrawGame() {
-  finishCurrentRound();
-  gameState.active = false;
-  const completed =
-    gameState.lives > 0 && gameState.level >= gameState.maxLevels;
-  setQuickDrawStatus(
-    completed
-      ? `Hoàn thành! Score: ${gameState.score}.`
-      : `Game over. Score: ${gameState.score}.`,
-  );
-  setQuickDrawGuesses();
-}
-
-async function predictForQuickDraw(manual = false) {
-  if (!hasDrawn) {
-    if (manual) setQuickDrawStatus("Bạn cần vẽ trước khi nhận diện.");
+  drawHandSkeleton(ctx, landmarks);
+  const index = landmarks[8];
+  const indexPip = landmarks[6];
+  const indexUp = index.y < indexPip.y;
+  const openPalm = [8, 12, 16, 20].every((tipIdx) => landmarks[tipIdx].y < landmarks[tipIdx - 2].y);
+  const now = Date.now();
+  if (openPalm && now - state.lastPalmClear > 1600) {
+    state.lastPalmClear = now;
+    clearDrawing();
+    setStatus("Open palm: đã xóa nét.");
     return;
   }
-  if (gamePredictionInFlight) return;
-
-  gamePredictionInFlight = true;
-  try {
-    const result = await requestCanvasPrediction("camera");
-    setQuickDrawGuesses(result.top3 || []);
-    updateRecognizedPreview(result);
-    const topGuess = result.label
-      ? `${result.label} (${result.confidence_percent}%)`
-      : "chưa rõ";
-
-    if (!gameState.roundActive) {
-      setQuickDrawStatus(`AI thinks: ${topGuess}.`);
-      return;
-    }
-
-    if (
-      result.label === gameState.target &&
-      Number(result.confidence || 0) >= 0.45
-    ) {
-      handleRoundSuccess(result);
-    } else if (manual) {
-      setQuickDrawStatus(`AI thinks: ${topGuess}. Hãy vẽ rõ hơn hoặc thử lại.`);
-    } else {
-      setQuickDrawStatus(`AI thinks: ${topGuess}.`);
-    }
-  } catch (error) {
-    setQuickDrawStatus(`Lỗi nhận diện: ${error.message}`);
-  } finally {
-    gamePredictionInFlight = false;
-  }
-}
-
-function setLoading(value) {
-  loading.classList.toggle("hidden", !value);
-  predictBtn.disabled = value;
-}
-
-function resetReferenceImage(message = "Chưa tạo ảnh tham khảo.") {
-  referenceImage.classList.add("hidden");
-  referenceImage.removeAttribute("src");
-  referencePlaceholder.classList.remove("hidden");
-  referencePlaceholder.textContent = message;
-  referenceStatus.textContent = "";
-}
-
-function markdownLite(text) {
-  return String(text)
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/g, "<em>$1</em>");
-}
-
-async function predictDrawing() {
-  if (!hasDrawn) {
-    alert("Bạn hãy vẽ một hình trước khi nhận diện nhé.");
+  if (!state.running && !state.currentTarget) return;
+  if (!indexUp) {
+    if (state.currentStroke) endStroke();
     return;
   }
-
-  setLoading(true);
-  emptyState.classList.add("hidden");
-  resultBox.classList.add("hidden");
-
-  try {
-    const blob = await new Promise((resolve) =>
-      canvas.toBlob(resolve, "image/png"),
-    );
-    const formData = new FormData();
-    formData.append("file", blob, "drawing.png");
-
-    const response = await fetch("/predict", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || "Không gọi được API nhận diện.");
-    }
-
-    const result = await response.json();
-    currentLabel = result.label;
-    updateRecognizedPreview(result);
-    predictedLabel.textContent = `${result.label} (${result.meaning_vi})`;
-    confidenceText.textContent = `Độ tin cậy: ${result.confidence_percent}%`;
-    enhancedDrawingImg.src = result.enhanced_drawing;
-    resetReferenceImage("Bấm Tạo ảnh để sinh ảnh tham khảo thực tế.");
-
-    top3List.innerHTML = "";
-    result.top3.forEach((item) => {
-      const row = document.createElement("div");
-      row.className = "top3-item";
-      row.innerHTML = `
-        <strong>${item.label} — ${item.meaning_vi}</strong>
-        <span>${(item.confidence * 100).toFixed(2)}%</span>
-      `;
-      top3List.appendChild(row);
-    });
-
-    chatbotReply.innerHTML = markdownLite(result.chatbot_reply);
-    resultBox.classList.remove("hidden");
-  } catch (error) {
-    chatbotReply.textContent = `Có lỗi xảy ra: ${error.message}`;
-    resultBox.classList.remove("hidden");
-  } finally {
-    setLoading(false);
-  }
+  const raw = { x: (1 - index.x) * CANVAS_W, y: index.y * CANVAS_H, t: performance.now() };
+  const p = smoothPoint(raw);
+  if (!state.currentStroke) beginStroke(p);
+  else extendStroke(p);
 }
 
-async function generateReferenceImage() {
-  if (!currentLabel) {
-    alert("Bạn cần nhận diện hình vẽ trước khi tạo ảnh tham khảo.");
-    return;
+function smoothPoint(point) {
+  if (!state.filteredPoint) {
+    state.filteredPoint = point;
+    return point;
   }
-
-  generateImageBtn.disabled = true;
-  referenceStatus.textContent = "Đang tạo ảnh tham khảo...";
-  referencePlaceholder.textContent = "Đang xử lý ảnh...";
-  referenceImage.classList.add("hidden");
-
-  try {
-    const formData = new FormData();
-    formData.append("label", currentLabel);
-    const response = await fetch("/image/generate", {
-      method: "POST",
-      body: formData,
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(result.detail || "Không tạo được ảnh tham khảo.");
-
-    referenceImage.src = result.image;
-    referenceImage.classList.remove("hidden");
-    referencePlaceholder.classList.add("hidden");
-    referenceStatus.textContent =
-      result.provider === "offline-pil-reference"
-        ? "Đang dùng ảnh tham khảo offline. Thêm OPENAI_API_KEY để tạo ảnh photorealistic."
-        : `Ảnh tạo bằng ${result.provider}.`;
-  } catch (error) {
-    resetReferenceImage("Không tạo được ảnh tham khảo.");
-    referenceStatus.textContent = `Lỗi tạo ảnh: ${error.message}`;
-  } finally {
-    generateImageBtn.disabled = false;
-  }
+  const alpha = 0.38;
+  state.filteredPoint = {
+    x: state.filteredPoint.x * (1 - alpha) + point.x * alpha,
+    y: state.filteredPoint.y * (1 - alpha) + point.y * alpha,
+    t: point.t,
+  };
+  return state.filteredPoint;
 }
 
-canvas.addEventListener("mousedown", startDrawing);
-canvas.addEventListener("mousemove", draw);
-canvas.addEventListener("mouseup", stopDrawing);
-canvas.addEventListener("mouseleave", stopDrawing);
-canvas.addEventListener("touchstart", startDrawing, { passive: false });
-canvas.addEventListener("touchmove", draw, { passive: false });
-canvas.addEventListener("touchend", stopDrawing, { passive: false });
-
-clearBtn.addEventListener("click", () => {
-  resetCanvas();
-  currentLabel = "";
-  emptyState.classList.remove("hidden");
-  resultBox.classList.add("hidden");
-  resetReferenceImage();
-  setQuickDrawGuesses();
-  clearRecognizedPreview();
-});
-
-predictBtn.addEventListener("click", predictDrawing);
-generateImageBtn.addEventListener("click", generateReferenceImage);
-brushSize.addEventListener("input", () => {
-  ctx.lineWidth = Number(brushSize.value);
-});
-
-resetCanvas();
-clearRecognizedPreview();
-renderTargetGuide();
-
-startCameraBtn.addEventListener("click", () =>
-  startFaceCamera().catch(() => {}),
-);
-stopCameraBtn.addEventListener("click", stopFaceCamera);
-showGuideToggle.addEventListener("change", renderTargetGuide);
-enrollFaceBtn.addEventListener("click", () => sendFace("enroll"));
-verifyFaceBtn.addEventListener("click", () => sendFace("verify"));
-startHandDrawBtn.addEventListener("click", startHandDrawing);
-stopHandDrawBtn.addEventListener("click", stopHandDrawing);
-startQuickDrawBtn.addEventListener("click", startQuickDrawGame);
-skipRoundBtn.addEventListener("click", skipQuickDrawRound);
-clearAirDrawBtn.addEventListener("click", () => {
-  resetCanvas();
-  currentLabel = "";
-  setQuickDrawGuesses();
-  clearRecognizedPreview();
-  setQuickDrawStatus(
-    gameState.roundActive
-      ? `Đã xóa nét. Tiếp tục vẽ ${gameState.target}.`
-      : "Đã xóa nét vẽ.",
-  );
-});
-submitAirDrawBtn.addEventListener("click", () => predictForQuickDraw(true));
-
-// ===== Tự sinh hình minh hoạ & dự đoán (gọi backend /samples/*) =====
-(function () {
-  const img = document.getElementById("samplesImage");
-  const status = document.getElementById("samplesStatus");
-  if (!img || !status) return;
-  async function loadSample(endpoint, label) {
-    status.textContent = "Đang tự sinh: " + label + " ...";
-    img.style.display = "none";
-    try {
-      const res = await fetch(
-        endpoint + (endpoint.includes("?") ? "&" : "?") + "t=" + Date.now(),
-      );
-      const ctype = res.headers.get("content-type") || "";
-      if (!res.ok || !ctype.includes("image")) {
-        let msg = "Không sinh được ảnh.";
-        try {
-          const j = await res.json();
-          if (j && j.error) msg = j.error;
-        } catch (e) {}
-        status.textContent =
-          "Lỗi: " + msg + " (cần có dữ liệu QuickDraw hoặc mạng).";
-        return;
-      }
-      const blob = await res.blob();
-      img.src = URL.createObjectURL(blob);
-      img.style.display = "block";
-      status.textContent = "Đã sinh: " + label;
-    } catch (e) {
-      status.textContent = "Lỗi khi gọi máy chủ: " + e.message;
-    }
+function drawHandSkeleton(ctx, landmarks) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(85, 230, 165, 0.95)";
+  ctx.fillStyle = "rgba(87, 167, 255, 0.95)";
+  ctx.lineWidth = 3;
+  const lines = [[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
+  for (const chain of lines) {
+    ctx.beginPath();
+    chain.forEach((idx, i) => {
+      const p = landmarks[idx];
+      const x = (1 - p.x) * CANVAS_W;
+      const y = p.y * CANVAS_H;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
   }
-  const g = document.getElementById("genGridBtn");
-  const p = document.getElementById("genPredBtn");
-  const m = document.getElementById("genMultiBtn");
-  if (g)
-    g.addEventListener("click", () =>
-      loadSample("/samples/grid", "hình mẫu mỗi lớp"),
-    );
-  if (p)
-    p.addEventListener("click", () =>
-      loadSample(
-        "/samples/prediction?seed=" + Math.floor(Math.random() * 9999),
-        "dự đoán 1 hình",
-      ),
-    );
-  if (m)
-    m.addEventListener("click", () =>
-      loadSample(
-        "/samples/multiple?count=15&seed=" + Math.floor(Math.random() * 9999),
-        "lưới nhiều dự đoán",
-      ),
-    );
-})();
+  for (const p of landmarks) {
+    ctx.beginPath();
+    ctx.arc((1 - p.x) * CANVAS_W, p.y * CANVAS_H, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawGuide(label) {
+  const canvas = $("#guideCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  if (!label) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(20, 40, 80, 0.34)";
+  ctx.lineWidth = 10;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const x = (n) => n * CANVAS_W;
+  const y = (n) => n * CANVAS_H;
+  const circle = (cx, cy, r) => { ctx.beginPath(); ctx.arc(x(cx), y(cy), r * Math.min(CANVAS_W, CANVAS_H), 0, Math.PI * 2); ctx.stroke(); };
+  const line = (a,b,c,d) => { ctx.beginPath(); ctx.moveTo(x(a), y(b)); ctx.lineTo(x(c), y(d)); ctx.stroke(); };
+  const rect = (a,b,w,h) => ctx.strokeRect(x(a), y(b), x(w), y(h));
+  switch (label) {
+    case "apple": circle(0.5,0.56,0.22); line(0.5,0.34,0.5,0.24); line(0.52,0.27,0.62,0.22); break;
+    case "pants": rect(0.35,0.28,0.3,0.12); line(0.38,0.4,0.33,0.78); line(0.5,0.4,0.47,0.78); line(0.52,0.4,0.57,0.78); line(0.65,0.4,0.68,0.78); break;
+    case "star": for(let i=0;i<5;i++){ const a=-Math.PI/2+i*2*Math.PI/5; const b=-Math.PI/2+((i*2+2)%10)*Math.PI/5; line(0.5+0.25*Math.cos(a),0.5+0.25*Math.sin(a),0.5+0.25*Math.cos(b),0.5+0.25*Math.sin(b)); } break;
+    case "square": rect(0.3,0.25,0.4,0.5); break;
+    case "book": rect(0.25,0.25,0.5,0.5); line(0.5,0.25,0.5,0.75); break;
+    case "dog": circle(0.5,0.52,0.22); circle(0.35,0.38,0.08); circle(0.65,0.38,0.08); break;
+    case "fish": circle(0.46,0.52,0.18); line(0.64,0.52,0.78,0.38); line(0.64,0.52,0.78,0.66); circle(0.39,0.48,0.025); break;
+    default: circle(0.5,0.5,0.22); line(0.32,0.72,0.68,0.72); break;
+  }
+  ctx.restore();
+}
+
+boot();

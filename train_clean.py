@@ -1,5 +1,5 @@
 """
-Train sạch & đáng tin cậy cho AirDrawVocab (QuickDraw 28x28, 19 lớp).
+Train sạch & đáng tin cậy cho AirDrawVocab (QuickDraw 28x28, số lớp theo config.CATEGORIES).
 
 Khác với advanced_train_model.py (gặp lỗi val_accuracy ~ngẫu nhiên do
 augmentation layers/BatchNorm trên Keras 3), script này:

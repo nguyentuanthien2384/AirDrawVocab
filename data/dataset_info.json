@@ -32,8 +32,8 @@
   ],
   "styles_per_category": 3,
   "augmentation": [
-    "rotation \u00b112\u00b0",
-    "shift \u00b16px",
+    "rotation ±12°",
+    "shift ±6px",
     "gaussian blur",
     "gaussian noise",
     "scale 0.8-1.2"
@@ -174,5 +174,7 @@
   },
   "total_png": 20900,
   "total_npy_per_class": 1100,
-  "generated_seconds": 234.82
+  "generated_seconds": 234.82,
+  "project_vocab_target": 40,
+  "note": "Project vocab is 40 in vocab_pairs.py. Bundled npy/model artifact may still contain 19 trained classes until re-downloaded/re-trained."
 }

@@ -37,7 +37,8 @@ def main() -> int:
     assert health.status_code == 200, health.text
     health_data = health.json()
     assert health_data["status"] == "ok"
-    assert health_data["num_categories"] == 19
+    assert health_data["num_categories"] >= 1
+    assert health_data.get("num_vocab_categories", health_data["num_categories"]) >= health_data["num_categories"]
     assert "airdrawvocab" in health_data["model_path"].lower()
     print(f"[OK] Health endpoint, model={health_data['model_path']}")
 

@@ -497,3 +497,8 @@ python face_cli.py verify --camera 1
 3. Mở desktop game bằng `python game.py --face-login --face-user thien`.
 4. Vẽ bằng ngón tay/chuột, model nhận diện realtime và cho điểm.
 5. Trình bày kiến trúc: CNN nhận diện hình vẽ + chatbot giải thích + face auth xác thực người học.
+
+## Cập nhật UI theo ảnh tham khảo
+
+Bản này đã phát triển thêm dashboard, đăng ký/đăng nhập SQLite, nhận diện ảnh upload, tab kết quả, đọc thông tin bằng giọng nói trình duyệt và khu vực demo/analytics. Chi tiết xem `UI_REFERENCE_DEVELOPMENT_NOTES.md`. Các chức năng này bám theo dự án AirDrawVocab 40 từ vựng, không chuyển hướng sang đề tài nhận diện bệnh mắt.
+

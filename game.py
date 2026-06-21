@@ -15,6 +15,8 @@ Chạy: python game.py
 
 import os
 import sys
+import json
+from pathlib import Path
 import time
 import random
 import threading
@@ -49,7 +51,7 @@ except Exception as e:
     HAS_TENSORFLOW = False
     print(f"[SETUP] TensorFlow chưa sẵn sàng: {e}. AI nhận diện sẽ tắt.")
 
-from vocab_data import VOCAB_DATA, CATEGORIES
+from vocab_data import VOCAB_DATA, CATEGORIES as ALL_CATEGORIES
 
 # AI Assistant (100% Offline)
 try:
@@ -63,10 +65,10 @@ except ImportError:
 # ========================
 # CẤU HÌNH
 # ========================
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 720
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 620
+CAMERA_WIDTH = 760
+CAMERA_HEIGHT = 465
 CANVAS_SIZE = 28  # Kích thước canvas cho model (28x28)
 FPS = 30
 
@@ -75,7 +77,7 @@ TIME_PER_WORD = 60
 # Số mạng sống
 MAX_LIVES = 3
 # Số level trong game
-TOTAL_LEVELS = 15
+TOTAL_LEVELS = 40
 # Ngưỡng confidence để chấp nhận dự đoán
 CONFIDENCE_THRESHOLD = 0.5
 
@@ -87,6 +89,10 @@ GREEN = (50, 200, 50)
 BLUE = (50, 100, 255)
 YELLOW = (255, 220, 50)
 CYAN = (0, 220, 220)
+HUD_BG = (22, 50, 86)
+BTN_SKY = (120, 210, 245)
+BTN_SHADOW = (12, 18, 28)
+MAGENTA = (255, 75, 220)
 DARK_BG = (30, 30, 45)
 PANEL_BG = (45, 45, 65)
 ORANGE = (255, 165, 0)
@@ -96,6 +102,28 @@ PURPLE = (150, 100, 255)
 
 # Đường dẫn model: import từ config dùng chung
 from config import MODEL_PATH
+
+CATEGORIES_JSON_PATH = Path(__file__).resolve().parent / "models" / "categories.json"
+
+
+def load_model_categories():
+    """Nhãn mà model hiện tại nhận diện được. vocab_pairs.py có thể là 40 từ,
+    nhưng file model cũ có thể chỉ output 19 lớp; khi đó chỉ dùng 19 từ để chơi
+    để tránh round không thể thắng. Khi train/gắn model 40 lớp, game tự dùng 40.
+    """
+    try:
+        with open(CATEGORIES_JSON_PATH, "r", encoding="utf-8") as f:
+            labels = json.load(f)
+        if isinstance(labels, list) and labels:
+            return list(labels)
+    except Exception:
+        pass
+    return list(ALL_CATEGORIES)
+
+
+MODEL_CATEGORIES = load_model_categories()
+CATEGORIES = MODEL_CATEGORIES
+
 
 
 # ========================
@@ -322,6 +350,7 @@ class AIPredictor:
 
     def __init__(self, model_path=MODEL_PATH):
         self.model = None
+        self.categories = list(MODEL_CATEGORIES)
         self.load_model(model_path)
 
     def load_model(self, model_path):
@@ -335,6 +364,13 @@ class AIPredictor:
             try:
                 # compile=False giúp load file .h5 ổn định hơn giữa các phiên bản Keras/TensorFlow.
                 self.model = tf.keras.models.load_model(model_path, compile=False)
+                try:
+                    output_classes = int(self.model.output_shape[-1])
+                    if output_classes != len(self.categories):
+                        print(f"[AI] Model output {output_classes} lớp, file nhãn có {len(self.categories)} lớp. Sẽ dùng {min(output_classes, len(self.categories))} lớp nhận diện được.")
+                        self.categories = self.categories[:output_classes]
+                except Exception:
+                    pass
                 print(f"[AI] Đã tải model: {model_path}")
             except Exception as e:
                 print(f"[AI] Lỗi tải model: {e}")
@@ -359,7 +395,7 @@ class AIPredictor:
         probs = self.model.predict(input_data, verbose=0)[0]
         pred_idx = np.argmax(probs)
         confidence = probs[pred_idx]
-        pred_label = CATEGORIES[pred_idx]
+        pred_label = self.categories[pred_idx] if pred_idx < len(self.categories) else ""
 
         return pred_label, float(confidence), probs
 
@@ -374,7 +410,8 @@ class AIPredictor:
 
         results = []
         for idx in top_indices:
-            results.append((CATEGORIES[idx], float(probs[idx])))
+            if idx < len(self.categories):
+                results.append((self.categories[idx], float(probs[idx])))
         return results
 
 
@@ -397,8 +434,8 @@ class AirDrawVocabGame:
         self.clock = pygame.time.Clock()
 
         # Font
-        self.font_large = pygame.font.SysFont("Arial", 36, bold=True)
-        self.font_medium = pygame.font.SysFont("Arial", 24)
+        self.font_large = pygame.font.SysFont("Arial", 30, bold=True)
+        self.font_medium = pygame.font.SysFont("Arial", 23)
         self.font_small = pygame.font.SysFont("Arial", 18)
         self.font_title = pygame.font.SysFont("Arial", 48, bold=True)
         self.font_huge = pygame.font.SysFont("Arial", 64, bold=True)
@@ -453,7 +490,7 @@ class AirDrawVocabGame:
         # === VE BANG CHUOT ===
         self.mouse_drawing = False
         self.cam_x = (WINDOW_WIDTH - CAMERA_WIDTH) // 2
-        self.cam_y = 80
+        self.cam_y = 88
         self.no_camera = not self.cap.isOpened()
 
         # === AI ASSISTANT ===
@@ -463,14 +500,15 @@ class AirDrawVocabGame:
         self.show_hint = False
         if HAS_AI:
             model = self.ai_predictor.model if self.ai_predictor.model else None
-            self.ai_manager = AIManager(model, CATEGORIES)
+            self.ai_manager = AIManager(model, self.ai_predictor.categories)
         self.feedback_color = GREEN
         self.feedback_timer = 0
 
     def generate_word_list(self):
         """Tạo danh sách từ vựng ngẫu nhiên cho game"""
-        words = list(CATEGORIES.copy())
+        words = list(self.ai_predictor.categories or MODEL_CATEGORIES or ALL_CATEGORIES)
         random.shuffle(words)
+        self.total_levels = min(TOTAL_LEVELS, len(words))
         self.word_list = words[:self.total_levels]
 
     def start_game(self):
@@ -607,81 +645,70 @@ class AirDrawVocabGame:
 
         return btn_rect
 
-    def draw_game_ui(self, camera_surface):
-        """Vẽ giao diện game khi đang chơi"""
-        self.screen.fill(DARK_BG)
+    def get_game_button_rects(self):
+        """Vị trí nút overlay giống ảnh minh họa: Menu trái, Submit giữa, Clear phải."""
+        button_y = self.cam_y + CAMERA_HEIGHT - 50
+        menu_btn = pygame.Rect(self.cam_x + 12, button_y, 96, 36)
+        submit_btn = pygame.Rect(WINDOW_WIDTH // 2 - 58, button_y, 116, 36)
+        clear_btn = pygame.Rect(self.cam_x + CAMERA_WIDTH - 108, button_y, 96, 36)
+        return menu_btn, clear_btn, submit_btn
 
-        # --- CAMERA + CANVAS ---
+    def draw_game_ui(self, camera_surface):
+        """Vẽ giao diện game camera theo style ảnh mẫu: HUD trên, camera toàn màn, nút overlay."""
+        self.screen.fill((14, 20, 32))
+
         cam_x = self.cam_x
         cam_y = self.cam_y
-        self.screen.blit(camera_surface, (cam_x, cam_y))
 
-        # Viền camera
-        pygame.draw.rect(self.screen, CYAN, (cam_x - 2, cam_y - 2,
-                                              CAMERA_WIDTH + 4, CAMERA_HEIGHT + 4), 2)
+        # Top HUD nền xanh đậm giống screenshot.
+        pygame.draw.rect(self.screen, HUD_BG, (0, 0, WINDOW_WIDTH, cam_y))
+        pygame.draw.line(self.screen, (45, 72, 105), (0, cam_y - 1), (WINDOW_WIDTH, cam_y - 1), 2)
 
-        # --- TOP BAR ---
-        # Draw word
-        word_text = self.font_large.render(f"Draw: {self.current_word}", True, GREEN)
-        self.screen.blit(word_text, (20, 10))
+        word_text = self.font_large.render(f"Draw: {self.current_word}", True, MAGENTA)
+        self.screen.blit(word_text, (18, 16))
+        score_text = self.font_medium.render(f"Score: {self.score}", True, WHITE)
+        self.screen.blit(score_text, (18, 50))
 
-        # Score
-        score_text = self.font_medium.render(f"Score: {self.score}", True, YELLOW)
-        self.screen.blit(score_text, (20, 50))
-
-        # Time
-        time_color = RED if self.time_left < 10 else YELLOW
-        time_text = self.font_large.render(f"Time: {int(self.time_left)}", True, time_color)
-        self.screen.blit(time_text, (WINDOW_WIDTH // 2 - time_text.get_width() // 2, 10))
-
-        # Level
-        level_text = self.font_medium.render(f"Level: {self.current_level}/{self.total_levels}", True, LIGHT_GRAY)
+        time_text = self.font_large.render(f"Time: {int(self.time_left)}", True, WHITE)
+        self.screen.blit(time_text, (WINDOW_WIDTH // 2 - time_text.get_width() // 2, 14))
+        level_text = self.font_medium.render(f"Level: {self.current_level}/{self.total_levels}", True, WHITE)
         self.screen.blit(level_text, (WINDOW_WIDTH // 2 - level_text.get_width() // 2, 50))
 
-        # Lives
-        lives_str = "♥ " * self.lives + "♡ " * (MAX_LIVES - self.lives)
-        lives_text = self.font_large.render(f"Lives: {lives_str}", True, RED)
-        self.screen.blit(lives_text, (WINDOW_WIDTH - lives_text.get_width() - 20, 10))
+        lives_str = "♥" * self.lives + "♡" * (MAX_LIVES - self.lives)
+        lives_text = self.font_medium.render(f"Lives: {lives_str}", True, WHITE)
+        self.screen.blit(lives_text, (WINDOW_WIDTH - lives_text.get_width() - 22, 16))
+        streak_text = self.font_medium.render(f"Streak: {self.streak}", True, WHITE)
+        self.screen.blit(streak_text, (WINDOW_WIDTH - streak_text.get_width() - 22, 50))
 
-        # Streak
-        streak_text = self.font_medium.render(f"Streak: {self.streak}", True, ORANGE)
-        self.screen.blit(streak_text, (WINDOW_WIDTH - streak_text.get_width() - 20, 50))
+        # Camera lớn ngay dưới HUD.
+        if camera_surface.get_width() != CAMERA_WIDTH or camera_surface.get_height() != CAMERA_HEIGHT:
+            camera_surface = pygame.transform.smoothscale(camera_surface, (CAMERA_WIDTH, CAMERA_HEIGHT))
+        self.screen.blit(camera_surface, (cam_x, cam_y))
+        pygame.draw.rect(self.screen, (5, 8, 13), (cam_x, cam_y, CAMERA_WIDTH, CAMERA_HEIGHT), 2)
 
-        # --- AI PREDICTION (real-time) ---
         if self.realtime_prediction:
-            pred_color = GREEN if self.realtime_prediction == self.current_word else LIGHT_GRAY
+            pred_color = GREEN if self.realtime_prediction == self.current_word else WHITE
             pred_text = self.font_small.render(
                 f"AI thinks: {self.realtime_prediction} ({self.realtime_confidence:.0%})",
-                True, pred_color
+                True, pred_color,
             )
-            self.screen.blit(pred_text, (cam_x, cam_y + CAMERA_HEIGHT + 10))
+            badge = pygame.Rect(cam_x + 14, cam_y + 12, pred_text.get_width() + 20, 30)
+            pygame.draw.rect(self.screen, (12, 18, 28), badge, border_radius=14)
+            self.screen.blit(pred_text, (badge.x + 10, badge.y + 6))
 
-        # --- BUTTONS ---
-        # Menu button
-        menu_btn = pygame.Rect(cam_x, cam_y + CAMERA_HEIGHT + 35, 100, 35)
-        pygame.draw.rect(self.screen, PURPLE, menu_btn, border_radius=5)
-        menu_text = self.font_small.render("Menu", True, WHITE)
-        self.screen.blit(menu_text, (menu_btn.centerx - menu_text.get_width() // 2,
-                                     menu_btn.centery - menu_text.get_height() // 2))
+        menu_btn, clear_btn, submit_btn = self.get_game_button_rects()
+        for rect, label in [(menu_btn, "Menu"), (submit_btn, "Submit"), (clear_btn, "Clear")]:
+            shadow = rect.move(5, 5)
+            pygame.draw.rect(self.screen, BTN_SHADOW, shadow, border_radius=10)
+            pygame.draw.rect(self.screen, BTN_SKY if label != "Submit" else BLUE, rect, border_radius=10)
+            text = self.font_small.render(label, True, WHITE)
+            self.screen.blit(text, (rect.centerx - text.get_width() // 2, rect.centery - text.get_height() // 2))
 
-        # Clear button
-        clear_btn = pygame.Rect(cam_x + CAMERA_WIDTH - 100, cam_y + CAMERA_HEIGHT + 35, 100, 35)
-        pygame.draw.rect(self.screen, RED, clear_btn, border_radius=5)
-        clear_text = self.font_small.render("Clear", True, WHITE)
-        self.screen.blit(clear_text, (clear_btn.centerx - clear_text.get_width() // 2,
-                                      clear_btn.centery - clear_text.get_height() // 2))
-
-        # Submit button
-        submit_btn = pygame.Rect(WINDOW_WIDTH // 2 - 60, cam_y + CAMERA_HEIGHT + 35, 120, 35)
-        pygame.draw.rect(self.screen, BLUE, submit_btn, border_radius=5)
-        submit_text = self.font_small.render("Submit", True, WHITE)
-        self.screen.blit(submit_text, (submit_btn.centerx - submit_text.get_width() // 2,
-                                       submit_btn.centery - submit_text.get_height() // 2))
-
-        # --- FEEDBACK TEXT ---
         if self.feedback_text and time.time() - self.feedback_timer < 3:
             fb = self.font_medium.render(self.feedback_text, True, self.feedback_color)
-            self.screen.blit(fb, (WINDOW_WIDTH // 2 - fb.get_width() // 2, WINDOW_HEIGHT - 50))
+            bg = pygame.Rect(WINDOW_WIDTH // 2 - fb.get_width() // 2 - 14, WINDOW_HEIGHT - 34, fb.get_width() + 28, 28)
+            pygame.draw.rect(self.screen, (12, 18, 28), bg, border_radius=10)
+            self.screen.blit(fb, (WINDOW_WIDTH // 2 - fb.get_width() // 2, WINDOW_HEIGHT - 30))
 
         return menu_btn, clear_btn, submit_btn
 
@@ -840,13 +867,11 @@ class AirDrawVocabGame:
                     elif self.state == "PLAYING":
                         mx, my = mouse_pos
                         button_clicked = False
-                        clear_r = pygame.Rect(self.cam_x + CAMERA_WIDTH - 100, self.cam_y + CAMERA_HEIGHT + 35, 100, 35)
+                        menu_r, clear_r, submit_r = self.get_game_button_rects()
                         if clear_r.collidepoint(mx, my):
                             self.drawing_canvas.clear(); button_clicked = True
-                        menu_r = pygame.Rect(self.cam_x, self.cam_y + CAMERA_HEIGHT + 35, 100, 35)
                         if menu_r.collidepoint(mx, my):
                             self.state = "MENU"; button_clicked = True
-                        submit_r = pygame.Rect(WINDOW_WIDTH // 2 - 60, self.cam_y + CAMERA_HEIGHT + 35, 120, 35)
                         if submit_r.collidepoint(mx, my):
                             self.check_prediction(); button_clicked = True
                         if not button_clicked:

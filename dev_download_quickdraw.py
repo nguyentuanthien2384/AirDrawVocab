@@ -1,5 +1,5 @@
 """
-Tải dữ liệu QuickDraw numpy_bitmap cho 19 lớp vào data/npy_28/.
+Tải dữ liệu QuickDraw numpy_bitmap theo danh sách config.CATEGORIES (hiện 40 lớp) vào data/npy_28/.
 Tải từng phần (HTTP Range) để nhanh, chỉ lấy số mẫu cần.
 
     .\.venv311\Scripts\python.exe dev_download_quickdraw.py --per-class 8000

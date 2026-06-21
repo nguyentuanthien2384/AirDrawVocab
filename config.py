@@ -12,7 +12,7 @@ try:
     from vocab_pairs import CATEGORIES as _VOCAB_CATEGORIES
     CATEGORIES = list(_VOCAB_CATEGORIES)
 except Exception:
-    # Fallback: 19 lớp gốc nếu thiếu vocab_pairs.py
+    # Fallback: 19 lớp gốc nếu thiếu vocab_pairs.py (chỉ để tương thích lỗi import)
     CATEGORIES = [
         "apple", "baseball", "book", "bowtie", "diamond",
         "dog", "door", "envelope", "eye", "fish",

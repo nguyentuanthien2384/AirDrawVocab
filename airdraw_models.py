@@ -1,8 +1,8 @@
 """
-airdraw_models.py — "Model zoo" hiện đại cho AirDrawVocab (sketch 28x28, 19 lớp).
+airdraw_models.py — "Model zoo" hiện đại cho AirDrawVocab (sketch 28x28, số lớp theo config.NUM_CLASSES).
 
 Thiết kế để VƯỢT cnn_clean (~95.3%) mà vẫn deploy được trên web/desktop hiện tại
-(giữ nguyên input 28x28x1, output softmax 19 lớp, thứ tự nhãn = config.CATEGORIES).
+(giữ nguyên input 28x28x1, output softmax theo config.NUM_CLASSES, thứ tự nhãn = config.CATEGORIES).
 
 Điểm khác biệt so với bản cũ:
   - GroupNormalization / LayerNormalization thay BatchNorm => ổn định ở inference
@@ -26,7 +26,7 @@ from tensorflow.keras import layers
 try:
     from config import NUM_CLASSES
 except Exception:
-    NUM_CLASSES = 19
+    NUM_CLASSES = 40
 
 
 # ============================ AUGMENTATION ============================

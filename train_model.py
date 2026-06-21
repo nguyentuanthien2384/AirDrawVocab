@@ -76,7 +76,7 @@ print(f'  Train: {X_train.shape[0]:,} | Val: {X_val.shape[0]:,} | Test: {X_test.
 
 # === MẪU DỮ LIỆU ===
 fig, axes = plt.subplots(4, 5, figsize=(15, 12))
-fig.suptitle('Mẫu hình vẽ từ QuickDraw Dataset (19 từ vựng)', fontsize=16, fontweight='bold')
+fig.suptitle('Mẫu hình vẽ từ QuickDraw Dataset', fontsize=16, fontweight='bold')
 for idx, (ax, cat) in enumerate(zip(axes.flat, CATEGORIES)):
     sample = X_train[y_train == idx][0].reshape(IMG_SIZE, IMG_SIZE)
     ax.imshow(sample, cmap='gray_r'); ax.set_title(cat); ax.axis('off')
@@ -92,7 +92,7 @@ print("""Kiến trúc CNN:
   Input (28x28x1)
   → Conv2D(16, 3x3, ReLU) + BatchNorm → MaxPool(2x2) + Dropout(0.15)
   → Conv2D(32, 3x3, ReLU) + BatchNorm → MaxPool(2x2) + Dropout(0.25)
-  → Flatten → Dense(64, ReLU) + Dropout(0.40) → Dense(19, Softmax)
+  → Flatten → Dense(64, ReLU) + Dropout(0.40) → Dense(NUM_CLASSES, Softmax)
 """)
 
 model = Sequential([

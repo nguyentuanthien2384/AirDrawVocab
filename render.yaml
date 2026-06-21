@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: airdrawvocab-final-boss
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: USE_TTA
+        value: "1"

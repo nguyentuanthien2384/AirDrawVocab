@@ -1,0 +1,12 @@
+.venv
+.venv311
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore
+.DS_Store
+*.log
+data/retrain_*.log
+data/self_improve_export

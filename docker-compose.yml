@@ -1,0 +1,13 @@
+services:
+  airdrawvocab:
+    build: .
+    container_name: airdrawvocab-final-boss
+    ports:
+      - "8000:8000"
+    environment:
+      - USE_TTA=1
+      - PORT=8000
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    restart: unless-stopped

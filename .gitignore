@@ -59,6 +59,13 @@ models/resnet_sketch_best.keras
 !models/airdrawvocab_best_advanced.keras
 !models/categories.json
 
+# MLflow experiment tracking (Phase 1 - tự sinh)
+mlruns/
+mlartifacts/
+
+# Versioned models + metadata (Phase 1 - tự sinh)
+models/versions/
+
 # Jupyter / local notebooks
 .ipynb_checkpoints/
 *.ipynb_checkpoints

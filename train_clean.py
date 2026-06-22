@@ -37,6 +37,11 @@ from config import (
     CATEGORIES, NUM_CLASSES, RANDOM_STATE,
     DATA_DIR, MODELS_DIR, CATEGORIES_PATH,
 )
+from mlflow_utils import (
+    start_mlflow_run, log_params, log_metrics, log_model, end_mlflow_run,
+)
+from repro import set_global_seed, collect_environment
+from model_versioning import save_versioned_model
 
 
 def load_split(train_pc: int, val_pc: int, test_pc: int, seed: int):
@@ -122,6 +127,37 @@ def main():
     ap.add_argument("--out", default=str(MODELS_DIR / "airdrawvocab_best_advanced.keras"))
     args = ap.parse_args()
 
+    # Reproducibility: cố định seed trước khi build/train.
+    set_global_seed(RANDOM_STATE)
+    env = collect_environment()
+
+    # ==================== MLflow Setup ====================
+    start_mlflow_run(
+        experiment_name="AirDrawVocab_CNN",
+        run_name=f"clean_cnn_{args.train_per_class}pc_ep{args.epochs}",
+        tags={
+            "model_type": "CNN_VGG_Style",
+            "script": "train_clean.py",
+            "dataset": "QuickDraw_28x28",
+        },
+    )
+    log_params({
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "train_per_class": args.train_per_class,
+        "val_per_class": args.val_per_class,
+        "test_per_class": args.test_per_class,
+        "learning_rate": args.lr,
+        "patience": args.patience,
+        "dropout": 0.4,
+        "optimizer": "Adam",
+        "loss": "categorical_crossentropy",
+        "num_classes": NUM_CLASSES,
+        "seed": RANDOM_STATE,
+        **{f"env_{k}": v for k, v in env.items()},
+    })
+    # =====================================================
+
     print(f"TensorFlow {tf.__version__}, classes={NUM_CLASSES}")
     x_tr, y_tr, x_va, y_va, x_te, y_te = load_split(
         args.train_per_class, args.val_per_class, args.test_per_class, RANDOM_STATE)
@@ -141,7 +177,7 @@ def main():
                                           patience=2, min_lr=1e-6, verbose=1),
     ]
 
-    model.fit(
+    history = model.fit(
         make_ds(x_tr, y_tr, args.batch_size, True),
         validation_data=make_ds(x_va, y_va, args.batch_size, False),
         epochs=args.epochs, callbacks=cbs, verbose=2,
@@ -157,6 +193,30 @@ def main():
     for cid, cat in enumerate(CATEGORIES):
         m = y_te == cid
         print(f"  {cat:10s}: {(pred[m] == cid).mean()*100:5.1f}%")
+
+    # ==================== MLflow Logging + Versioning ====================
+    metrics = {
+        "test_accuracy": float(acc),
+        "test_top3_accuracy": float(top3),
+        "final_train_accuracy": float(history.history["accuracy"][-1]),
+        "final_val_accuracy": float(history.history["val_accuracy"][-1]),
+    }
+    log_metrics(metrics)
+    log_model(model, model_name="airdraw_clean_cnn")
+
+    save_versioned_model(
+        model,
+        base_name="airdraw_clean_cnn",
+        metrics=metrics,
+        params={
+            "epochs": args.epochs,
+            "train_per_class": args.train_per_class,
+            "learning_rate": args.lr,
+        },
+        extra={"env": env},
+    )
+    end_mlflow_run()
+    # ====================================================================
 
     model.save(args.out)
     CATEGORIES_PATH.write_text(json.dumps(CATEGORIES, ensure_ascii=False), encoding="utf-8")

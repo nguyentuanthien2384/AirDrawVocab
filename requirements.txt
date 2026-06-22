@@ -28,5 +28,9 @@ httpx>=0.27.0
 matplotlib>=3.8,<4.0
 seaborn>=0.13,<0.14
 
+# Experiment tracking (Phase 1 - tùy chọn). Nếu không cài, các script train
+# vẫn chạy bình thường (mlflow_utils.py tự động bỏ qua tracking).
+mlflow>=2.12.0,<3.0
+
 # Windows runtime helper
 msvc-runtime>=14.40; platform_system == "Windows"

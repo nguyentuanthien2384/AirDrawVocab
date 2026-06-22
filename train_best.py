@@ -32,6 +32,11 @@ from config import (CATEGORIES, NUM_CLASSES, DATA_DIR, MODELS_DIR, MODEL_PATH,
                     CATEGORIES_PATH, RANDOM_STATE)
 import airdraw_models as Z
 from urllib.parse import quote
+from mlflow_utils import (
+    start_mlflow_run, log_params, log_metrics, log_model, end_mlflow_run,
+)
+from repro import set_global_seed, collect_environment
+from model_versioning import save_versioned_model
 
 QD_URL = "https://storage.googleapis.com/quickdraw_dataset/full/numpy_bitmap/{}.npy"
 
@@ -121,6 +126,39 @@ def main():
                     help="train nhanh: ít dữ liệu/epoch + augment rẻ + steps_per_execution")
     args = ap.parse_args()
 
+    # Reproducibility
+    set_global_seed(RANDOM_STATE)
+    env = collect_environment()
+
+    # ==================== MLflow Setup ====================
+    start_mlflow_run(
+        experiment_name="AirDrawVocab_Advanced",
+        run_name=f"{args.model}_{args.per_class}pc",
+        tags={
+            "model": args.model,
+            "script": "train_best.py",
+            "fast_mode": args.fast,
+            "ensemble": args.ensemble,
+            "smoke_test": args.smoke,
+        },
+    )
+    log_params({
+        "model": args.model,
+        "per_class": args.per_class,
+        "train_pc": args.train_pc,
+        "val_pc": args.val_pc,
+        "test_pc": args.test_pc,
+        "epochs": args.epochs,
+        "batch_size": args.batch,
+        "tta": args.tta,
+        "ensemble": args.ensemble,
+        "fast_mode": args.fast,
+        "smoke": args.smoke,
+        "seed": RANDOM_STATE,
+        **{f"env_{k}": v for k, v in env.items()},
+    })
+    # =====================================================
+
     spe = 1
     if args.fast:
         args.per_class = min(args.per_class, 5000)
@@ -195,6 +233,21 @@ def main():
         for n, m in trained.items():
             m.save(MODELS_DIR / f"member_{n}.keras")
         print(f"Đã lưu {len(trained)} model thành viên (member_*.keras) cho ensemble.")
+
+    # ==================== MLflow Logging + Versioning ====================
+    metrics = {f"acc_{n}": float(s) for n, s in scores.items()}
+    metrics["best_plain_accuracy"] = float(scores[best])
+    log_metrics(metrics)
+    log_model(trained[best], model_name=best)
+    save_versioned_model(
+        trained[best],
+        base_name=best,
+        metrics={"best_plain_accuracy": float(scores[best])},
+        params={"per_class": args.per_class, "epochs": args.epochs, "model": args.model},
+        extra={"env": env, "all_scores": {n: float(s) for n, s in scores.items()}},
+    )
+    end_mlflow_run()
+    # ====================================================================
 
     # Lưu model deploy
     MODELS_DIR.mkdir(parents=True, exist_ok=True)

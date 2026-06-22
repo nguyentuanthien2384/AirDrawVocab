@@ -67,7 +67,11 @@ async function apiGet(url) {
 }
 
 async function apiPostForm(url, form) {
-  const res = await fetch(url, { method: "POST", body: form, credentials: "same-origin" });
+  const res = await fetch(url, {
+    method: "POST",
+    body: form,
+    credentials: "same-origin",
+  });
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
@@ -131,7 +135,9 @@ function renderLogin(message = "") {
     e.preventDefault();
     loginOrRegister("login");
   });
-  $("#registerBtn").addEventListener("click", () => loginOrRegister("register"));
+  $("#registerBtn").addEventListener("click", () =>
+    loginOrRegister("register"),
+  );
 }
 
 async function loginOrRegister(action) {
@@ -146,7 +152,8 @@ async function loginOrRegister(action) {
   const form = new FormData();
   form.append("username", username);
   form.append("password", password);
-  status.textContent = action === "login" ? "Đang đăng nhập..." : "Đang đăng ký...";
+  status.textContent =
+    action === "login" ? "Đang đăng nhập..." : "Đang đăng ký...";
   status.className = "status";
   try {
     const data = await apiPostForm(`/auth/${action}`, form);
@@ -161,7 +168,9 @@ async function loginOrRegister(action) {
 
 async function logout() {
   disconnectPvp();
-  try { await apiPostForm("/auth/logout", new FormData()); } catch {}
+  try {
+    await apiPostForm("/auth/logout", new FormData());
+  } catch {}
   state.user = null;
   renderLogin("Đã đăng xuất.");
 }
@@ -169,20 +178,33 @@ async function logout() {
 async function loadGameData() {
   const data = await apiGet("/vocab");
   state.vocab = data.vocab || [];
-  state.supportedVocab = state.vocab.filter((item) => item.recognition_supported);
-  state.gamePool = state.supportedVocab.length ? state.supportedVocab : state.vocab;
+  state.supportedVocab = state.vocab.filter(
+    (item) => item.recognition_supported,
+  );
+  state.gamePool = state.supportedVocab.length
+    ? state.supportedVocab
+    : state.vocab;
   await refreshProfileAndLeaderboard();
 }
 
 async function refreshProfileAndLeaderboard() {
-  try { state.profile = await apiGet("/game/profile"); } catch { state.profile = null; }
-  try { state.leaderboard = (await apiGet("/game/leaderboard")).leaderboard || []; } catch { state.leaderboard = []; }
+  try {
+    state.profile = await apiGet("/game/profile");
+  } catch {
+    state.profile = null;
+  }
+  try {
+    state.leaderboard = (await apiGet("/game/leaderboard")).leaderboard || [];
+  } catch {
+    state.leaderboard = [];
+  }
 }
 
 function renderGameShell() {
-  const recognitionNote = state.supportedVocab.length < state.vocab.length
-    ? `<div class="warning-note">Model hiện tại nhận diện ${state.supportedVocab.length}/${state.vocab.length} từ. Game sẽ ưu tiên các từ model đang hỗ trợ; khi bạn thay model 40 lớp, game tự mở đủ 40 từ.</div>`
-    : "";
+  const recognitionNote =
+    state.supportedVocab.length < state.vocab.length
+      ? `<div class="warning-note">Model hiện tại nhận diện ${state.supportedVocab.length}/${state.vocab.length} từ. Game sẽ ưu tiên các từ model đang hỗ trợ; khi bạn thay model 40 lớp, game tự mở đủ 40 từ.</div>`
+      : "";
 
   app.innerHTML = `
     <main class="game-shell">
@@ -312,7 +334,9 @@ function wireGameEvents() {
   $("#logoutBtn").addEventListener("click", logout);
   $("#mouseModeBtn").addEventListener("click", () => setMode("mouse"));
   $("#cameraModeBtn").addEventListener("click", () => setMode("camera"));
-  $("#startBtn").addEventListener("click", () => state.running ? endGame("Bạn đã kết thúc lượt chơi.") : startGame());
+  $("#startBtn").addEventListener("click", () =>
+    state.running ? endGame("Bạn đã kết thúc lượt chơi.") : startGame(),
+  );
   $("#clearBtn").addEventListener("click", clearDrawing);
   $("#skipBtn").addEventListener("click", skipRound);
   $("#saveBtn").addEventListener("click", () => saveStrokeSample(false));
@@ -417,7 +441,10 @@ async function setMode(mode) {
   $("#cameraModeBtn").classList.toggle("active", mode === "camera");
   if (mode === "camera") {
     await startCamera();
-    setStatus("Camera mode: dùng ngón trỏ để vẽ, mở cả bàn tay để xóa nhanh.", "ok");
+    setStatus(
+      "Camera mode: dùng ngón trỏ để vẽ, mở cả bàn tay để xóa nhanh.",
+      "ok",
+    );
   } else {
     stopCamera();
     setStatus("Mouse mode: vẽ trực tiếp trên khung trắng.");
@@ -447,7 +474,9 @@ async function startGame() {
   state.correct = 0;
   state.attempts = 0;
   state.startedAt = Date.now();
-  state.gamePool = shuffle(state.supportedVocab.length ? state.supportedVocab : state.vocab);
+  state.gamePool = shuffle(
+    state.supportedVocab.length ? state.supportedVocab : state.vocab,
+  );
   $("#startBtn").textContent = "Kết thúc";
   $("#skipBtn").disabled = false;
   $("#saveBtn").disabled = false;
@@ -455,7 +484,10 @@ async function startGame() {
   startGameTimer();
   startRealtimeAI();
   if (state.mode === "camera") await startCamera();
-  setStatus("Final Boss Mode đang chạy: AI tự đoán real-time và tự qua màn khi đúng.", "ok");
+  setStatus(
+    "Final Boss Mode đang chạy: AI tự đoán real-time và tự qua màn khi đúng.",
+    "ok",
+  );
 }
 
 function nextRound() {
@@ -465,7 +497,8 @@ function nextRound() {
     return;
   }
   clearDrawing();
-  state.currentTarget = state.gamePool[(state.level - 1) % state.gamePool.length];
+  state.currentTarget =
+    state.gamePool[(state.level - 1) % state.gamePool.length];
   state.roundTime = Math.max(35, 60 - Math.min(state.streak, 10) * 2);
   state.timeLeft = state.roundTime;
   state.roundStartedAt = Date.now();
@@ -490,7 +523,13 @@ function startRealtimeAI() {
   clearInterval(state.realtimeId);
   const speed = () => Number($("#speedRange")?.value || REALTIME_INTERVAL_MS);
   const tick = async () => {
-    if (!state.running || !state.currentTarget || !state.hasDrawn || state.predictInFlight) return;
+    if (
+      !state.running ||
+      !state.currentTarget ||
+      !state.hasDrawn ||
+      state.predictInFlight
+    )
+      return;
     await realtimePredict();
   };
   state.realtimeId = setInterval(tick, speed());
@@ -512,7 +551,10 @@ async function realtimePredict() {
     form.append("elapsed_ms", String(Date.now() - state.roundStartedAt));
     let data = await apiPostForm("/predict_godmode", form);
     const strokeData = await tryStrokePrediction();
-    if (strokeData?.available && strokeData.confidence > (data.confidence || 0)) {
+    if (
+      strokeData?.available &&
+      strokeData.confidence > (data.confidence || 0)
+    ) {
       data = {
         ...data,
         label: strokeData.label,
@@ -529,7 +571,13 @@ async function realtimePredict() {
     state.judge = data.judge;
     updatePredictionPanel(data);
     updateJudge(data.judge);
-    broadcastPvp({ type: "prediction", label: data.label, confidence: data.confidence, target: state.currentTarget?.label, score: state.score });
+    broadcastPvp({
+      type: "prediction",
+      label: data.label,
+      confidence: data.confidence,
+      target: state.currentTarget?.label,
+      score: state.score,
+    });
     handleRealtimeDecision(data);
   } catch (err) {
     setStatus(err.message, "error");
@@ -559,7 +607,10 @@ function handleRealtimeDecision(data) {
   $("#confidenceProgress").style.width = `${Math.round(conf * 100)}%`;
   state.predictionBuffer.push({ label: data.label, confidence: conf });
   if (state.predictionBuffer.length > 6) state.predictionBuffer.shift();
-  const threshold = Math.max(0.58, SUCCESS_THRESHOLD_BASE - Math.min(state.streak, 8) * 0.01);
+  const threshold = Math.max(
+    0.58,
+    SUCCESS_THRESHOLD_BASE - Math.min(state.streak, 8) * 0.01,
+  );
   if (data.label === target && conf >= threshold) {
     state.consecutiveCorrect += 1;
   } else {
@@ -581,7 +632,12 @@ function passRound(confidence) {
   state.bestStreak = Math.max(state.bestStreak, state.streak);
   state.consecutiveCorrect = 0;
   showCorrectFlash(`Correct +${gained}`);
-  broadcastPvp({ type: "score", score: state.score, target: state.currentTarget?.label, message: `Correct +${gained}` });
+  broadcastPvp({
+    type: "score",
+    score: state.score,
+    target: state.currentTarget?.label,
+    message: `Correct +${gained}`,
+  });
   saveStrokeSample(true);
   setTimeout(() => {
     state.level += 1;
@@ -624,11 +680,18 @@ async function endGame(message) {
   form.append("accuracy", String(accuracy.toFixed(1)));
   form.append("duration_seconds", String(duration));
   form.append("mode", state.mode);
-  try { await apiPostForm("/game/session", form); } catch (err) { console.warn(err); }
+  try {
+    await apiPostForm("/game/session", form);
+  } catch (err) {
+    console.warn(err);
+  }
   await refreshProfileAndLeaderboard();
   renderProfile();
   renderLeaderboard();
-  setStatus(`${message} Score: ${state.score}. Accuracy: ${accuracy.toFixed(1)}%.`, "ok");
+  setStatus(
+    `${message} Score: ${state.score}. Accuracy: ${accuracy.toFixed(1)}%.`,
+    "ok",
+  );
 }
 
 function stopAllLoops() {
@@ -650,50 +713,134 @@ function updateHud() {
 }
 
 function getIllustrationSVG(label) {
-  const S = (paths, extra = "") => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#55e6a5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" ${extra}>${paths}</svg>`;
+  const S = (paths, extra = "") =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#55e6a5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" ${extra}>${paths}</svg>`;
   const map = {
-    apple:    S(`<circle cx="50" cy="58" r="26"/><path d="M50 32 Q55 20 65 18"/><path d="M50 34 Q44 24 36 26"/>`),
-    baseball: S(`<circle cx="50" cy="50" r="28"/><path d="M34 26 Q38 38 34 50 Q30 62 34 74" stroke-width="3"/><path d="M66 26 Q62 38 66 50 Q70 62 66 74" stroke-width="3"/>`),
-    book:     S(`<rect x="22" y="18" width="56" height="64" rx="3"/><line x1="50" y1="18" x2="50" y2="82"/><line x1="30" y1="32" x2="48" y2="32"/><line x1="30" y1="42" x2="48" y2="42"/><line x1="30" y1="52" x2="48" y2="52"/>`),
-    bowtie:   S(`<polygon points="20,28 50,50 20,72" fill="rgba(85,230,165,0.15)"/><polygon points="80,28 50,50 80,72" fill="rgba(85,230,165,0.15)"/><circle cx="50" cy="50" r="6" fill="#55e6a5"/>`),
-    diamond:  S(`<polygon points="50,14 84,50 50,86 16,50" fill="rgba(85,230,165,0.12)"/><line x1="16" y1="50" x2="50" y2="14"/><line x1="50" y1="14" x2="84" y2="50"/><line x1="84" y1="50" x2="50" y2="86"/><line x1="50" y1="86" x2="16" y2="50"/><line x1="16" y1="50" x2="84" y2="50"/>`),
-    dog:      S(`<circle cx="50" cy="54" r="24"/><ellipse cx="30" cy="40" rx="10" ry="14" transform="rotate(-15,30,40)"/><ellipse cx="70" cy="40" rx="10" ry="14" transform="rotate(15,70,40)"/><circle cx="43" cy="50" r="3" fill="#55e6a5"/><circle cx="57" cy="50" r="3" fill="#55e6a5"/><ellipse cx="50" cy="60" rx="7" ry="4"/>`),
-    door:     S(`<rect x="28" y="14" width="44" height="72" rx="2"/><circle cx="64" cy="52" r="3" fill="#55e6a5"/><path d="M28 86 H72"/>`),
-    envelope: S(`<rect x="14" y="28" width="72" height="48" rx="3"/><path d="M14 28 L50 58 L86 28"/>`),
-    eye:      S(`<ellipse cx="50" cy="50" rx="36" ry="22"/><circle cx="50" cy="50" r="12"/><circle cx="50" cy="50" r="6" fill="rgba(85,230,165,0.3)"/>`),
-    fish:     S(`<ellipse cx="46" cy="50" rx="24" ry="16"/><polygon points="70,50 86,36 86,64" fill="rgba(85,230,165,0.15)"/><circle cx="36" cy="46" r="3" fill="#55e6a5"/><line x1="30" y1="50" x2="58" y2="40" stroke-width="2"/>`),
-    hat:      S(`<path d="M20 70 Q50 60 80 70"/><path d="M35 70 Q36 38 50 34 Q64 38 65 70"/><rect x="15" y="68" width="70" height="8" rx="4"/>`),
-    leaf:     S(`<path d="M50 82 Q22 60 24 34 Q36 18 50 18 Q64 18 76 34 Q78 60 50 82Z" fill="rgba(85,230,165,0.15)"/><line x1="50" y1="82" x2="50" y2="22"/><line x1="50" y1="42" x2="36" y2="56" stroke-width="2"/><line x1="50" y1="54" x2="38" y2="65" stroke-width="2"/><line x1="50" y1="42" x2="64" y2="56" stroke-width="2"/><line x1="50" y1="54" x2="62" y2="65" stroke-width="2"/>`),
-    lightning: S(`<polygon points="58,12 36,52 52,52 42,88 72,44 54,44" fill="rgba(255,209,102,0.2)" stroke="#ffd166" stroke-width="3"/>`),
-    moon:     S(`<path d="M70 28 Q86 50 70 72 Q50 82 34 72 Q54 68 58 50 Q54 32 34 28 Q50 18 70 28Z" fill="rgba(85,230,165,0.15)"/>`),
-    pants:    S(`<rect x="28" y="18" width="44" height="20" rx="3"/><path d="M28 38 L28 82 L50 82 L50 56 L50 82 L72 82 L72 38"/>`),
-    scissors: S(`<line x1="50" y1="50" x2="24" y2="22"/><line x1="50" y1="50" x2="76" y2="22"/><line x1="50" y1="50" x2="28" y2="80"/><line x1="50" y1="50" x2="72" y2="80"/><circle cx="30" cy="78" r="10"/><circle cx="70" cy="78" r="10"/>`),
-    square:   S(`<rect x="18" y="18" width="64" height="64" rx="2"/>`),
-    star:     S(`<polygon points="50,12 61,37 88,37 67,56 75,82 50,64 25,82 33,56 12,37 39,37" fill="rgba(85,230,165,0.15)"/>`),
-    "t-shirt": S(`<path d="M20 22 L36 14 L50 24 L64 14 L80 22 L70 44 L60 40 L60 82 L40 82 L40 40 L30 44Z" fill="rgba(85,230,165,0.12)"/>`),
-    cat:      S(`<circle cx="50" cy="56" r="22"/><polygon points="32,36 26,14 44,28" fill="rgba(85,230,165,0.2)"/><polygon points="68,36 74,14 56,28" fill="rgba(85,230,165,0.2)"/><circle cx="43" cy="52" r="3" fill="#55e6a5"/><circle cx="57" cy="52" r="3" fill="#55e6a5"/><path d="M42 62 Q50 67 58 62"/><line x1="30" y1="58" x2="50" y2="62" stroke-width="2"/><line x1="70" y1="58" x2="50" y2="62" stroke-width="2"/>`),
-    sun:      S(`<circle cx="50" cy="50" r="18" fill="rgba(255,209,102,0.2)" stroke="#ffd166"/><line x1="50" y1="10" x2="50" y2="22" stroke="#ffd166"/><line x1="50" y1="78" x2="50" y2="90" stroke="#ffd166"/><line x1="10" y1="50" x2="22" y2="50" stroke="#ffd166"/><line x1="78" y1="50" x2="90" y2="50" stroke="#ffd166"/><line x1="22" y1="22" x2="30" y2="30" stroke="#ffd166"/><line x1="70" y1="70" x2="78" y2="78" stroke="#ffd166"/><line x1="78" y1="22" x2="70" y2="30" stroke="#ffd166"/><line x1="22" y1="78" x2="30" y2="70" stroke="#ffd166"/>`),
-    tree:     S(`<ellipse cx="50" cy="36" rx="28" ry="24" fill="rgba(85,230,165,0.15)"/><rect x="44" y="58" width="12" height="26" rx="2"/>`),
-    flower:   S(`<circle cx="50" cy="50" r="10" fill="rgba(255,209,102,0.3)" stroke="#ffd166"/><ellipse cx="50" cy="28" rx="9" ry="14" fill="rgba(85,230,165,0.2)"/><ellipse cx="50" cy="72" rx="9" ry="14" fill="rgba(85,230,165,0.2)"/><ellipse cx="28" cy="50" rx="14" ry="9" fill="rgba(85,230,165,0.2)"/><ellipse cx="72" cy="50" rx="14" ry="9" fill="rgba(85,230,165,0.2)"/><ellipse cx="34" cy="34" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(-45,34,34)"/><ellipse cx="66" cy="34" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(45,66,34)"/><ellipse cx="34" cy="66" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(45,34,66)"/><ellipse cx="66" cy="66" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(-45,66,66)"/>`),
-    cloud:    S(`<ellipse cx="40" cy="58" rx="24" ry="18"/><ellipse cx="62" cy="58" rx="20" ry="16"/><ellipse cx="50" cy="46" rx="18" ry="16"/>`),
-    umbrella: S(`<path d="M14 50 Q14 20 50 18 Q86 20 86 50Z"/><line x1="50" y1="18" x2="50" y2="76"/><path d="M50 76 Q50 86 40 86 Q30 86 30 76"/>`),
-    key:      S(`<circle cx="36" cy="42" r="16"/><circle cx="36" cy="42" r="8"/><line x1="50" y1="42" x2="86" y2="42"/><line x1="74" y1="42" x2="74" y2="54"/><line x1="84" y1="42" x2="84" y2="52"/>`),
-    cup:      S(`<path d="M26 30 L34 80 L66 80 L74 30Z"/><path d="M74 46 Q88 46 88 58 Q88 70 74 70"/>`),
-    clock:    S(`<circle cx="50" cy="50" r="34"/><line x1="50" y1="50" x2="50" y2="24" stroke-width="5"/><line x1="50" y1="50" x2="68" y2="60" stroke-width="3"/><circle cx="50" cy="50" r="3" fill="#55e6a5"/>`),
-    car:      S(`<rect x="12" y="44" width="76" height="30" rx="6"/><path d="M24 44 L32 24 L68 24 L76 44"/><circle cx="28" cy="76" r="10"/><circle cx="72" cy="76" r="10"/><rect x="36" y="28" width="14" height="14" rx="2"/><rect x="52" y="28" width="14" height="14" rx="2"/>`),
-    bicycle:  S(`<circle cx="28" cy="62" r="20"/><circle cx="72" cy="62" r="20"/><line x1="28" y1="62" x2="50" y2="32"/><line x1="72" y1="62" x2="50" y2="32"/><line x1="50" y1="32" x2="28" y2="62"/><line x1="50" y1="32" x2="50" y2="48"/><line x1="44" y1="26" x2="56" y2="26"/>`),
-    airplane: S(`<path d="M8 54 L50 36 L92 54 L74 54 L74 68 L50 62 L26 68 L26 54Z" fill="rgba(85,230,165,0.12)"/><path d="M50 36 L50 76"/><path d="M42 72 L58 72"/>`),
-    house:    S(`<polygon points="50,14 88,46 78,46 78,86 22,86 22,46 12,46" fill="rgba(85,230,165,0.12)"/><rect x="38" y="62" width="24" height="24" rx="2"/>`),
-    banana:   S(`<path d="M26 78 Q18 50 32 28 Q46 16 66 18 Q74 18 74 26 Q74 34 60 34 Q40 34 32 52 Q26 66 34 78Z" fill="rgba(255,209,102,0.2)" stroke="#ffd166"/>`),
-    "ice cream": S(`<polygon points="50,88 26,42 74,42" fill="rgba(85,230,165,0.12)"/><circle cx="50" cy="34" r="18" fill="rgba(255,120,80,0.2)" stroke="#ff7850" stroke-width="3"/><path d="M38 28 Q44 22 50 28 Q56 22 62 28" stroke="#ff7850" stroke-width="2"/>`),
-    cake:     S(`<rect x="20" y="52" width="60" height="34" rx="4" fill="rgba(85,230,165,0.12)"/><rect x="30" y="42" width="40" height="12" rx="2"/><line x1="34" y1="22" x2="34" y2="42"/><line x1="50" y1="18" x2="50" y2="42"/><line x1="66" y1="22" x2="66" y2="42"/><ellipse cx="34" cy="20" rx="4" ry="6" stroke="#ffd166"/><ellipse cx="50" cy="16" rx="4" ry="6" stroke="#ffd166"/><ellipse cx="66" cy="20" rx="4" ry="6" stroke="#ffd166"/>`),
-    candle:   S(`<rect x="38" y="42" width="24" height="46" rx="3" fill="rgba(85,230,165,0.12)"/><path d="M50 12 Q54 22 50 30 Q46 22 50 12Z" fill="rgba(255,209,102,0.4)" stroke="#ffd166"/><line x1="50" y1="30" x2="50" y2="42"/>`),
-    guitar:   S(`<path d="M50 16 Q58 16 60 24 L62 52 Q68 54 68 62 Q68 76 50 82 Q32 76 32 62 Q32 54 38 52 L40 24 Q42 16 50 16Z" fill="rgba(85,230,165,0.12)"/><circle cx="50" cy="62" r="8"/><line x1="42" y1="16" x2="58" y2="16"/>`),
-    hammer:   S(`<line x1="42" y1="50" x2="70" y2="82"/><rect x="34" y="22" width="36" height="22" rx="4" fill="rgba(85,230,165,0.15)" transform="rotate(-30,52,33)"/>`),
-    bed:      S(`<rect x="10" y="48" width="80" height="34" rx="4"/><rect x="10" y="44" width="18" height="38" rx="3"/><rect x="72" y="44" width="18" height="38" rx="3"/><ellipse cx="38" cy="48" rx="18" ry="10" fill="rgba(85,230,165,0.2)"/><ellipse cx="62" cy="48" rx="18" ry="10" fill="rgba(85,230,165,0.2)"/>`),
-    chair:    S(`<rect x="28" y="34" width="44" height="8" rx="2"/><line x1="28" y1="42" x2="24" y2="82"/><line x1="72" y1="42" x2="76" y2="82"/><line x1="32" y1="42" x2="32" y2="82"/><line x1="68" y1="42" x2="68" y2="82"/><rect x="28" y="14" width="8" height="22" rx="2"/><rect x="64" y="14" width="8" height="22" rx="2"/><line x1="28" y1="24" x2="72" y2="24"/>`,),
+    apple: S(
+      `<circle cx="50" cy="58" r="26"/><path d="M50 32 Q55 20 65 18"/><path d="M50 34 Q44 24 36 26"/>`,
+    ),
+    baseball: S(
+      `<circle cx="50" cy="50" r="28"/><path d="M34 26 Q38 38 34 50 Q30 62 34 74" stroke-width="3"/><path d="M66 26 Q62 38 66 50 Q70 62 66 74" stroke-width="3"/>`,
+    ),
+    book: S(
+      `<rect x="22" y="18" width="56" height="64" rx="3"/><line x1="50" y1="18" x2="50" y2="82"/><line x1="30" y1="32" x2="48" y2="32"/><line x1="30" y1="42" x2="48" y2="42"/><line x1="30" y1="52" x2="48" y2="52"/>`,
+    ),
+    bowtie: S(
+      `<polygon points="20,28 50,50 20,72" fill="rgba(85,230,165,0.15)"/><polygon points="80,28 50,50 80,72" fill="rgba(85,230,165,0.15)"/><circle cx="50" cy="50" r="6" fill="#55e6a5"/>`,
+    ),
+    diamond: S(
+      `<polygon points="50,14 84,50 50,86 16,50" fill="rgba(85,230,165,0.12)"/><line x1="16" y1="50" x2="50" y2="14"/><line x1="50" y1="14" x2="84" y2="50"/><line x1="84" y1="50" x2="50" y2="86"/><line x1="50" y1="86" x2="16" y2="50"/><line x1="16" y1="50" x2="84" y2="50"/>`,
+    ),
+    dog: S(
+      `<circle cx="50" cy="54" r="24"/><ellipse cx="30" cy="40" rx="10" ry="14" transform="rotate(-15,30,40)"/><ellipse cx="70" cy="40" rx="10" ry="14" transform="rotate(15,70,40)"/><circle cx="43" cy="50" r="3" fill="#55e6a5"/><circle cx="57" cy="50" r="3" fill="#55e6a5"/><ellipse cx="50" cy="60" rx="7" ry="4"/>`,
+    ),
+    door: S(
+      `<rect x="28" y="14" width="44" height="72" rx="2"/><circle cx="64" cy="52" r="3" fill="#55e6a5"/><path d="M28 86 H72"/>`,
+    ),
+    envelope: S(
+      `<rect x="14" y="28" width="72" height="48" rx="3"/><path d="M14 28 L50 58 L86 28"/>`,
+    ),
+    eye: S(
+      `<ellipse cx="50" cy="50" rx="36" ry="22"/><circle cx="50" cy="50" r="12"/><circle cx="50" cy="50" r="6" fill="rgba(85,230,165,0.3)"/>`,
+    ),
+    fish: S(
+      `<ellipse cx="46" cy="50" rx="24" ry="16"/><polygon points="70,50 86,36 86,64" fill="rgba(85,230,165,0.15)"/><circle cx="36" cy="46" r="3" fill="#55e6a5"/><line x1="30" y1="50" x2="58" y2="40" stroke-width="2"/>`,
+    ),
+    hat: S(
+      `<path d="M20 70 Q50 60 80 70"/><path d="M35 70 Q36 38 50 34 Q64 38 65 70"/><rect x="15" y="68" width="70" height="8" rx="4"/>`,
+    ),
+    leaf: S(
+      `<path d="M50 82 Q22 60 24 34 Q36 18 50 18 Q64 18 76 34 Q78 60 50 82Z" fill="rgba(85,230,165,0.15)"/><line x1="50" y1="82" x2="50" y2="22"/><line x1="50" y1="42" x2="36" y2="56" stroke-width="2"/><line x1="50" y1="54" x2="38" y2="65" stroke-width="2"/><line x1="50" y1="42" x2="64" y2="56" stroke-width="2"/><line x1="50" y1="54" x2="62" y2="65" stroke-width="2"/>`,
+    ),
+    lightning: S(
+      `<polygon points="58,12 36,52 52,52 42,88 72,44 54,44" fill="rgba(255,209,102,0.2)" stroke="#ffd166" stroke-width="3"/>`,
+    ),
+    moon: S(
+      `<path d="M70 28 Q86 50 70 72 Q50 82 34 72 Q54 68 58 50 Q54 32 34 28 Q50 18 70 28Z" fill="rgba(85,230,165,0.15)"/>`,
+    ),
+    pants: S(
+      `<rect x="28" y="18" width="44" height="20" rx="3"/><path d="M28 38 L28 82 L50 82 L50 56 L50 82 L72 82 L72 38"/>`,
+    ),
+    scissors: S(
+      `<line x1="50" y1="50" x2="24" y2="22"/><line x1="50" y1="50" x2="76" y2="22"/><line x1="50" y1="50" x2="28" y2="80"/><line x1="50" y1="50" x2="72" y2="80"/><circle cx="30" cy="78" r="10"/><circle cx="70" cy="78" r="10"/>`,
+    ),
+    square: S(`<rect x="18" y="18" width="64" height="64" rx="2"/>`),
+    star: S(
+      `<polygon points="50,12 61,37 88,37 67,56 75,82 50,64 25,82 33,56 12,37 39,37" fill="rgba(85,230,165,0.15)"/>`,
+    ),
+    "t-shirt": S(
+      `<path d="M20 22 L36 14 L50 24 L64 14 L80 22 L70 44 L60 40 L60 82 L40 82 L40 40 L30 44Z" fill="rgba(85,230,165,0.12)"/>`,
+    ),
+    cat: S(
+      `<circle cx="50" cy="56" r="22"/><polygon points="32,36 26,14 44,28" fill="rgba(85,230,165,0.2)"/><polygon points="68,36 74,14 56,28" fill="rgba(85,230,165,0.2)"/><circle cx="43" cy="52" r="3" fill="#55e6a5"/><circle cx="57" cy="52" r="3" fill="#55e6a5"/><path d="M42 62 Q50 67 58 62"/><line x1="30" y1="58" x2="50" y2="62" stroke-width="2"/><line x1="70" y1="58" x2="50" y2="62" stroke-width="2"/>`,
+    ),
+    sun: S(
+      `<circle cx="50" cy="50" r="18" fill="rgba(255,209,102,0.2)" stroke="#ffd166"/><line x1="50" y1="10" x2="50" y2="22" stroke="#ffd166"/><line x1="50" y1="78" x2="50" y2="90" stroke="#ffd166"/><line x1="10" y1="50" x2="22" y2="50" stroke="#ffd166"/><line x1="78" y1="50" x2="90" y2="50" stroke="#ffd166"/><line x1="22" y1="22" x2="30" y2="30" stroke="#ffd166"/><line x1="70" y1="70" x2="78" y2="78" stroke="#ffd166"/><line x1="78" y1="22" x2="70" y2="30" stroke="#ffd166"/><line x1="22" y1="78" x2="30" y2="70" stroke="#ffd166"/>`,
+    ),
+    tree: S(
+      `<ellipse cx="50" cy="36" rx="28" ry="24" fill="rgba(85,230,165,0.15)"/><rect x="44" y="58" width="12" height="26" rx="2"/>`,
+    ),
+    flower: S(
+      `<circle cx="50" cy="50" r="10" fill="rgba(255,209,102,0.3)" stroke="#ffd166"/><ellipse cx="50" cy="28" rx="9" ry="14" fill="rgba(85,230,165,0.2)"/><ellipse cx="50" cy="72" rx="9" ry="14" fill="rgba(85,230,165,0.2)"/><ellipse cx="28" cy="50" rx="14" ry="9" fill="rgba(85,230,165,0.2)"/><ellipse cx="72" cy="50" rx="14" ry="9" fill="rgba(85,230,165,0.2)"/><ellipse cx="34" cy="34" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(-45,34,34)"/><ellipse cx="66" cy="34" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(45,66,34)"/><ellipse cx="34" cy="66" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(45,34,66)"/><ellipse cx="66" cy="66" rx="9" ry="14" fill="rgba(85,230,165,0.2)" transform="rotate(-45,66,66)"/>`,
+    ),
+    cloud: S(
+      `<ellipse cx="40" cy="58" rx="24" ry="18"/><ellipse cx="62" cy="58" rx="20" ry="16"/><ellipse cx="50" cy="46" rx="18" ry="16"/>`,
+    ),
+    umbrella: S(
+      `<path d="M14 50 Q14 20 50 18 Q86 20 86 50Z"/><line x1="50" y1="18" x2="50" y2="76"/><path d="M50 76 Q50 86 40 86 Q30 86 30 76"/>`,
+    ),
+    key: S(
+      `<circle cx="36" cy="42" r="16"/><circle cx="36" cy="42" r="8"/><line x1="50" y1="42" x2="86" y2="42"/><line x1="74" y1="42" x2="74" y2="54"/><line x1="84" y1="42" x2="84" y2="52"/>`,
+    ),
+    cup: S(
+      `<path d="M26 30 L34 80 L66 80 L74 30Z"/><path d="M74 46 Q88 46 88 58 Q88 70 74 70"/>`,
+    ),
+    clock: S(
+      `<circle cx="50" cy="50" r="34"/><line x1="50" y1="50" x2="50" y2="24" stroke-width="5"/><line x1="50" y1="50" x2="68" y2="60" stroke-width="3"/><circle cx="50" cy="50" r="3" fill="#55e6a5"/>`,
+    ),
+    car: S(
+      `<rect x="12" y="44" width="76" height="30" rx="6"/><path d="M24 44 L32 24 L68 24 L76 44"/><circle cx="28" cy="76" r="10"/><circle cx="72" cy="76" r="10"/><rect x="36" y="28" width="14" height="14" rx="2"/><rect x="52" y="28" width="14" height="14" rx="2"/>`,
+    ),
+    bicycle: S(
+      `<circle cx="28" cy="62" r="20"/><circle cx="72" cy="62" r="20"/><line x1="28" y1="62" x2="50" y2="32"/><line x1="72" y1="62" x2="50" y2="32"/><line x1="50" y1="32" x2="28" y2="62"/><line x1="50" y1="32" x2="50" y2="48"/><line x1="44" y1="26" x2="56" y2="26"/>`,
+    ),
+    airplane: S(
+      `<path d="M8 54 L50 36 L92 54 L74 54 L74 68 L50 62 L26 68 L26 54Z" fill="rgba(85,230,165,0.12)"/><path d="M50 36 L50 76"/><path d="M42 72 L58 72"/>`,
+    ),
+    house: S(
+      `<polygon points="50,14 88,46 78,46 78,86 22,86 22,46 12,46" fill="rgba(85,230,165,0.12)"/><rect x="38" y="62" width="24" height="24" rx="2"/>`,
+    ),
+    banana: S(
+      `<path d="M26 78 Q18 50 32 28 Q46 16 66 18 Q74 18 74 26 Q74 34 60 34 Q40 34 32 52 Q26 66 34 78Z" fill="rgba(255,209,102,0.2)" stroke="#ffd166"/>`,
+    ),
+    "ice cream": S(
+      `<polygon points="50,88 26,42 74,42" fill="rgba(85,230,165,0.12)"/><circle cx="50" cy="34" r="18" fill="rgba(255,120,80,0.2)" stroke="#ff7850" stroke-width="3"/><path d="M38 28 Q44 22 50 28 Q56 22 62 28" stroke="#ff7850" stroke-width="2"/>`,
+    ),
+    cake: S(
+      `<rect x="20" y="52" width="60" height="34" rx="4" fill="rgba(85,230,165,0.12)"/><rect x="30" y="42" width="40" height="12" rx="2"/><line x1="34" y1="22" x2="34" y2="42"/><line x1="50" y1="18" x2="50" y2="42"/><line x1="66" y1="22" x2="66" y2="42"/><ellipse cx="34" cy="20" rx="4" ry="6" stroke="#ffd166"/><ellipse cx="50" cy="16" rx="4" ry="6" stroke="#ffd166"/><ellipse cx="66" cy="20" rx="4" ry="6" stroke="#ffd166"/>`,
+    ),
+    candle: S(
+      `<rect x="38" y="42" width="24" height="46" rx="3" fill="rgba(85,230,165,0.12)"/><path d="M50 12 Q54 22 50 30 Q46 22 50 12Z" fill="rgba(255,209,102,0.4)" stroke="#ffd166"/><line x1="50" y1="30" x2="50" y2="42"/>`,
+    ),
+    guitar: S(
+      `<path d="M50 16 Q58 16 60 24 L62 52 Q68 54 68 62 Q68 76 50 82 Q32 76 32 62 Q32 54 38 52 L40 24 Q42 16 50 16Z" fill="rgba(85,230,165,0.12)"/><circle cx="50" cy="62" r="8"/><line x1="42" y1="16" x2="58" y2="16"/>`,
+    ),
+    hammer: S(
+      `<line x1="42" y1="50" x2="70" y2="82"/><rect x="34" y="22" width="36" height="22" rx="4" fill="rgba(85,230,165,0.15)" transform="rotate(-30,52,33)"/>`,
+    ),
+    bed: S(
+      `<rect x="10" y="48" width="80" height="34" rx="4"/><rect x="10" y="44" width="18" height="38" rx="3"/><rect x="72" y="44" width="18" height="38" rx="3"/><ellipse cx="38" cy="48" rx="18" ry="10" fill="rgba(85,230,165,0.2)"/><ellipse cx="62" cy="48" rx="18" ry="10" fill="rgba(85,230,165,0.2)"/>`,
+    ),
+    chair: S(
+      `<rect x="28" y="34" width="44" height="8" rx="2"/><line x1="28" y1="42" x2="24" y2="82"/><line x1="72" y1="42" x2="76" y2="82"/><line x1="32" y1="42" x2="32" y2="82"/><line x1="68" y1="42" x2="68" y2="82"/><rect x="28" y="14" width="8" height="22" rx="2"/><rect x="64" y="14" width="8" height="22" rx="2"/><line x1="28" y1="24" x2="72" y2="24"/>`,
+    ),
   };
-  return map[label] || S(`<text x="50" y="56" text-anchor="middle" font-size="36" fill="#55e6a5" stroke="none">${label.slice(0,2).toUpperCase()}</text>`);
+  return (
+    map[label] ||
+    S(
+      `<text x="50" y="56" text-anchor="middle" font-size="36" fill="#55e6a5" stroke="none">${label.slice(0, 2).toUpperCase()}</text>`,
+    )
+  );
 }
 
 function updateTargetPanel() {
@@ -717,14 +864,22 @@ function updatePredictionPanel(data) {
     box.textContent = "AI chưa có dữ liệu.";
     return;
   }
-  const source = data.ai_source ? `<div class="mini-row"><span>AI source</span><small>${escapeHtml(data.ai_source)}</small></div>` : "";
-  box.innerHTML = source + data.top5.map((p) => `
+  const source = data.ai_source
+    ? `<div class="mini-row"><span>AI source</span><small>${escapeHtml(data.ai_source)}</small></div>`
+    : "";
+  box.innerHTML =
+    source +
+    data.top5
+      .map(
+        (p) => `
     <div class="pred-row">
       <div class="pred-label">${escapeHtml(p.label)}</div>
       <div class="pred-bar"><span style="width:${Math.round(p.confidence * 100)}%"></span></div>
       <div>${Math.round(p.confidence * 100)}%</div>
     </div>
-  `).join("");
+  `,
+      )
+      .join("");
 }
 
 function updateJudge(judge) {
@@ -733,7 +888,8 @@ function updateJudge(judge) {
   $("#clarityScore").textContent = judge?.clarity_score ?? 0;
   $("#strokeScore").textContent = judge?.stroke_score ?? 0;
   $("#speedScore").textContent = judge?.speed_score ?? 0;
-  $("#judgeFeedback").textContent = judge?.feedback || "AI sẽ đánh giá khi bạn bắt đầu vẽ.";
+  $("#judgeFeedback").textContent =
+    judge?.feedback || "AI sẽ đánh giá khi bạn bắt đầu vẽ.";
 }
 
 function renderProfile() {
@@ -747,14 +903,24 @@ function renderProfile() {
   `;
   const weaknesses = profile?.weaknesses || [];
   $("#weaknessBox").innerHTML = weaknesses.length
-    ? weaknesses.map((w) => `<div class="mini-row"><span>${escapeHtml(w.target)}</span><small>${w.accuracy}% / ${w.attempts} lần</small></div>`).join("")
+    ? weaknesses
+        .map(
+          (w) =>
+            `<div class="mini-row"><span>${escapeHtml(w.target)}</span><small>${w.accuracy}% / ${w.attempts} lần</small></div>`,
+        )
+        .join("")
     : `<div class="mini-row"><span>Chưa có dữ liệu yếu/mạnh</span><small>Chơi vài vòng để cập nhật</small></div>`;
 }
 
 function renderLeaderboard() {
   const rows = state.leaderboard || [];
   $("#leaderboardBox").innerHTML = rows.length
-    ? rows.map((r, i) => `<div class="mini-row"><span>#${i + 1} ${escapeHtml(r.username || "guest")}</span><small>${r.score || 0} pts</small></div>`).join("")
+    ? rows
+        .map(
+          (r, i) =>
+            `<div class="mini-row"><span>#${i + 1} ${escapeHtml(r.username || "guest")}</span><small>${r.score || 0} pts</small></div>`,
+        )
+        .join("")
     : `<div class="mini-row"><span>Chưa có bảng xếp hạng</span><small>Hãy chơi 1 lượt</small></div>`;
 }
 
@@ -773,7 +939,10 @@ function showCorrectFlash(text) {
 }
 
 function countStrokePoints() {
-  return state.strokes.reduce((sum, stroke) => sum + stroke.length, 0) + (state.currentStroke?.length || 0);
+  return (
+    state.strokes.reduce((sum, stroke) => sum + stroke.length, 0) +
+    (state.currentStroke?.length || 0)
+  );
 }
 
 async function saveStrokeSample(correct = false) {
@@ -785,16 +954,29 @@ async function saveStrokeSample(correct = false) {
   form.append("correct", correct ? "1" : "0");
   form.append("mode", state.mode);
   form.append("strokes_json", JSON.stringify(state.strokes));
-  try { await apiPostForm("/game/stroke", form); } catch (err) { console.warn(err); }
-  setStatus(correct ? "Đã lưu mẫu đúng vào dataset game." : "Đã lưu mẫu vẽ vào dataset game.", correct ? "ok" : "");
+  try {
+    await apiPostForm("/game/stroke", form);
+  } catch (err) {
+    console.warn(err);
+  }
+  setStatus(
+    correct
+      ? "Đã lưu mẫu đúng vào dataset game."
+      : "Đã lưu mẫu vẽ vào dataset game.",
+    correct ? "ok" : "",
+  );
 }
-
 
 async function tryStrokePrediction() {
   if (!state.currentTarget || countStrokePoints() < 8) return null;
   try {
     const form = new FormData();
-    form.append("strokes_json", JSON.stringify(state.strokes.concat(state.currentStroke ? [state.currentStroke] : [])));
+    form.append(
+      "strokes_json",
+      JSON.stringify(
+        state.strokes.concat(state.currentStroke ? [state.currentStroke] : []),
+      ),
+    );
     form.append("target", state.currentTarget.label);
     const data = await apiPostForm("/predict_stroke", form);
     state.strokeModelAvailable = Boolean(data.available);
@@ -822,7 +1004,11 @@ function connectPvp() {
     state.pvpSocket.onopen = () => {
       state.pvpConnected = true;
       renderPvp();
-      broadcastPvp({ type: "hello", score: state.score, target: state.currentTarget?.label || "" });
+      broadcastPvp({
+        type: "hello",
+        score: state.score,
+        target: state.currentTarget?.label || "",
+      });
     };
     state.pvpSocket.onmessage = (event) => {
       try {
@@ -849,8 +1035,20 @@ function disconnectPvp() {
 }
 
 function broadcastPvp(payload) {
-  if (!state.pvpConnected || !state.pvpSocket || state.pvpSocket.readyState !== WebSocket.OPEN) return;
-  state.pvpSocket.send(JSON.stringify({ ...payload, score: state.score, level: state.level, ts: Date.now() }));
+  if (
+    !state.pvpConnected ||
+    !state.pvpSocket ||
+    state.pvpSocket.readyState !== WebSocket.OPEN
+  )
+    return;
+  state.pvpSocket.send(
+    JSON.stringify({
+      ...payload,
+      score: state.score,
+      level: state.level,
+      ts: Date.now(),
+    }),
+  );
 }
 
 function renderPvp(players = []) {
@@ -862,9 +1060,20 @@ function renderPvp(players = []) {
   badge.className = state.pvpConnected ? "badge" : "badge warn";
   btn.textContent = state.pvpConnected ? "Leave" : "Join";
   const playerRows = players.length
-    ? players.map((p) => `<div class="mini-row"><span>${escapeHtml(p.username || "guest")}</span><small>${p.score || 0} pts</small></div>`).join("")
+    ? players
+        .map(
+          (p) =>
+            `<div class="mini-row"><span>${escapeHtml(p.username || "guest")}</span><small>${p.score || 0} pts</small></div>`,
+        )
+        .join("")
     : `<div class="mini-row"><span>${state.pvpConnected ? "Đang chờ người chơi" : "Chưa vào phòng"}</span><small>${escapeHtml(state.pvpRoom)}</small></div>`;
-  const eventRows = state.pvpEvents.slice(0, 3).map((e) => `<div class="mini-row"><span>${escapeHtml(e.username || "system")}</span><small>${escapeHtml(e.message || e.label || e.type || "event")}</small></div>`).join("");
+  const eventRows = state.pvpEvents
+    .slice(0, 3)
+    .map(
+      (e) =>
+        `<div class="mini-row"><span>${escapeHtml(e.username || "system")}</span><small>${escapeHtml(e.message || e.label || e.type || "event")}</small></div>`,
+    )
+    .join("");
   box.innerHTML = playerRows + eventRows;
 }
 
@@ -917,30 +1126,134 @@ function speakCurrentWord() {
 
 async function startCamera() {
   const video = $("#cameraVideo");
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("Browser không hỗ trợ camera API.", "error");
+  const stage = $("#gameStage");
+  if (!video) {
+    setStatus("Không tìm thấy khung video camera. Hãy tải lại trang.", "error");
     return;
   }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus(
+      "Trình duyệt không hỗ trợ camera API (getUserMedia). Dùng Chrome/Edge mới nhất.",
+      "error",
+    );
+    return;
+  }
+
+  // Đảm bảo class camera-mode để CSS hiển thị video (phòng trường hợp toggle bị lệch)
+  if (stage) stage.classList.add("camera-mode");
+  stage?.classList.remove("mouse-mode");
+
   if (!state.cameraStream) {
+    let stream = null;
     try {
-      state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 540 }, audio: false });
-      video.srcObject = state.cameraStream;
-      await video.play();
+      // Dùng ideal thay vì exact để tương thích tốt hơn với nhiều webcam
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 960 },
+          height: { ideal: 540 },
+          facingMode: "user",
+        },
+        audio: false,
+      });
+      video.srcObject = stream;
+      // Đợi play xong, một số trình duyệt cần user gesture rõ ràng
+      await video.play().catch((playErr) => {
+        console.warn("video.play() warning:", playErr);
+        // Vẫn tiếp tục, nhiều trường hợp stream vẫn chạy
+      });
+      state.cameraStream = stream;
+      setStatus(
+        "Camera đã bật. Dùng ngón trỏ để vẽ, mở bàn tay để xóa nhanh.",
+        "ok",
+      );
     } catch (err) {
-      setStatus(`Không mở được camera: ${err.message}`, "error");
-      return;
+      // Dọn stream nếu đã xin được quyền nhưng play/src lỗi
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      state.cameraStream = null;
+
+      let msg = `Không mở được camera: ${err.message || err.name}`;
+      if (
+        err.name === "NotAllowedError" ||
+        err.name === "PermissionDeniedError"
+      ) {
+        msg =
+          "Bạn đã từ chối quyền camera hoặc hệ thống chặn. Vào chrome://settings/content/camera để cho phép, rồi thử lại.";
+      } else if (
+        err.name === "NotFoundError" ||
+        err.name === "DevicesNotFoundError"
+      ) {
+        msg =
+          "Không tìm thấy camera. Hãy cắm webcam hoặc dùng laptop có camera tích hợp.";
+      } else if (err.name === "OverconstrainedError") {
+        msg =
+          "Camera không hỗ trợ độ phân giải yêu cầu. Đang thử lại với cấu hình đơn giản...";
+        // Thử lại với cấu hình tối thiểu
+        try {
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+          video.srcObject = fallbackStream;
+          await video.play().catch(() => {});
+          state.cameraStream = fallbackStream;
+          setStatus(
+            "Camera bật (chế độ đơn giản). Tracking vẫn hoạt động.",
+            "ok",
+          );
+          // Tiếp tục init MediaPipe bên dưới
+        } catch (e2) {
+          setStatus(msg, "error");
+          return;
+        }
+      } else {
+        setStatus(msg, "error");
+        return;
+      }
     }
   }
-  if (!state.hands && window.Hands) {
-    state.hands = new window.Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-    state.hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.65 });
-    state.hands.onResults(onHandResults);
+
+  // Khởi tạo MediaPipe Hands (bọc try/catch để camera vẫn bật dù MP lỗi)
+  if (!state.hands) {
+    if (window.Hands) {
+      try {
+        state.hands = new window.Hands({
+          locateFile: (file) =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+        });
+        state.hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.65,
+          minTrackingConfidence: 0.6,
+        });
+        state.hands.onResults(onHandResults);
+      } catch (mpErr) {
+        console.warn("MediaPipe init error:", mpErr);
+        setStatus(
+          "MediaPipe khởi tạo lỗi. Camera vẫn mở nhưng tracking ngón tay có thể không ổn định.",
+          "error",
+        );
+      }
+    } else {
+      setStatus(
+        "Đang tải MediaPipe... Nếu không có tracking, hãy tải lại trang (F5). Camera vẫn dùng được.",
+        "error",
+      );
+      // Thử load lại script nếu thiếu (rất hiếm)
+      if (!document.querySelector('script[src*="mediapipe/hands"]')) {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js";
+        s.defer = true;
+        document.head.appendChild(s);
+      }
+    }
   }
+
   if (state.hands && !state.handLoop) {
     state.handLoop = true;
     handFrameLoop();
-  } else if (!window.Hands) {
-    setStatus("MediaPipe chưa tải được. Camera vẫn mở nhưng chưa tracking ngón tay.", "error");
   }
 }
 
@@ -958,7 +1271,11 @@ function stopCamera() {
 async function handFrameLoop() {
   const video = $("#cameraVideo");
   while (state.handLoop && state.hands && video?.readyState >= 2) {
-    try { await state.hands.send({ image: video }); } catch (err) { console.warn(err); }
+    try {
+      await state.hands.send({ image: video });
+    } catch (err) {
+      console.warn(err);
+    }
     await new Promise((resolve) => requestAnimationFrame(resolve));
   }
 }
@@ -977,7 +1294,9 @@ function onHandResults(results) {
   const index = landmarks[8];
   const indexPip = landmarks[6];
   const indexUp = index.y < indexPip.y;
-  const openPalm = [8, 12, 16, 20].every((tipIdx) => landmarks[tipIdx].y < landmarks[tipIdx - 2].y);
+  const openPalm = [8, 12, 16, 20].every(
+    (tipIdx) => landmarks[tipIdx].y < landmarks[tipIdx - 2].y,
+  );
   const now = Date.now();
   if (openPalm && now - state.lastPalmClear > 1600) {
     state.lastPalmClear = now;
@@ -990,7 +1309,11 @@ function onHandResults(results) {
     if (state.currentStroke) endStroke();
     return;
   }
-  const raw = { x: (1 - index.x) * CANVAS_W, y: index.y * CANVAS_H, t: performance.now() };
+  const raw = {
+    x: (1 - index.x) * CANVAS_W,
+    y: index.y * CANVAS_H,
+    t: performance.now(),
+  };
   const p = smoothPoint(raw);
   if (!state.currentStroke) beginStroke(p);
   else extendStroke(p);
@@ -1015,14 +1338,22 @@ function drawHandSkeleton(ctx, landmarks) {
   ctx.strokeStyle = "rgba(85, 230, 165, 0.95)";
   ctx.fillStyle = "rgba(87, 167, 255, 0.95)";
   ctx.lineWidth = 3;
-  const lines = [[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
+  const lines = [
+    [0, 1, 2, 3, 4],
+    [0, 5, 6, 7, 8],
+    [0, 9, 10, 11, 12],
+    [0, 13, 14, 15, 16],
+    [0, 17, 18, 19, 20],
+    [5, 9, 13, 17],
+  ];
   for (const chain of lines) {
     ctx.beginPath();
     chain.forEach((idx, i) => {
       const p = landmarks[idx];
       const x = (1 - p.x) * CANVAS_W;
       const y = p.y * CANVAS_H;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     });
     ctx.stroke();
   }
@@ -1046,18 +1377,65 @@ function drawGuide(label) {
   ctx.lineJoin = "round";
   const x = (n) => n * CANVAS_W;
   const y = (n) => n * CANVAS_H;
-  const circle = (cx, cy, r) => { ctx.beginPath(); ctx.arc(x(cx), y(cy), r * Math.min(CANVAS_W, CANVAS_H), 0, Math.PI * 2); ctx.stroke(); };
-  const line = (a,b,c,d) => { ctx.beginPath(); ctx.moveTo(x(a), y(b)); ctx.lineTo(x(c), y(d)); ctx.stroke(); };
-  const rect = (a,b,w,h) => ctx.strokeRect(x(a), y(b), x(w), y(h));
+  const circle = (cx, cy, r) => {
+    ctx.beginPath();
+    ctx.arc(x(cx), y(cy), r * Math.min(CANVAS_W, CANVAS_H), 0, Math.PI * 2);
+    ctx.stroke();
+  };
+  const line = (a, b, c, d) => {
+    ctx.beginPath();
+    ctx.moveTo(x(a), y(b));
+    ctx.lineTo(x(c), y(d));
+    ctx.stroke();
+  };
+  const rect = (a, b, w, h) => ctx.strokeRect(x(a), y(b), x(w), y(h));
   switch (label) {
-    case "apple": circle(0.5,0.56,0.22); line(0.5,0.34,0.5,0.24); line(0.52,0.27,0.62,0.22); break;
-    case "pants": rect(0.35,0.28,0.3,0.12); line(0.38,0.4,0.33,0.78); line(0.5,0.4,0.47,0.78); line(0.52,0.4,0.57,0.78); line(0.65,0.4,0.68,0.78); break;
-    case "star": for(let i=0;i<5;i++){ const a=-Math.PI/2+i*2*Math.PI/5; const b=-Math.PI/2+((i*2+2)%10)*Math.PI/5; line(0.5+0.25*Math.cos(a),0.5+0.25*Math.sin(a),0.5+0.25*Math.cos(b),0.5+0.25*Math.sin(b)); } break;
-    case "square": rect(0.3,0.25,0.4,0.5); break;
-    case "book": rect(0.25,0.25,0.5,0.5); line(0.5,0.25,0.5,0.75); break;
-    case "dog": circle(0.5,0.52,0.22); circle(0.35,0.38,0.08); circle(0.65,0.38,0.08); break;
-    case "fish": circle(0.46,0.52,0.18); line(0.64,0.52,0.78,0.38); line(0.64,0.52,0.78,0.66); circle(0.39,0.48,0.025); break;
-    default: circle(0.5,0.5,0.22); line(0.32,0.72,0.68,0.72); break;
+    case "apple":
+      circle(0.5, 0.56, 0.22);
+      line(0.5, 0.34, 0.5, 0.24);
+      line(0.52, 0.27, 0.62, 0.22);
+      break;
+    case "pants":
+      rect(0.35, 0.28, 0.3, 0.12);
+      line(0.38, 0.4, 0.33, 0.78);
+      line(0.5, 0.4, 0.47, 0.78);
+      line(0.52, 0.4, 0.57, 0.78);
+      line(0.65, 0.4, 0.68, 0.78);
+      break;
+    case "star":
+      for (let i = 0; i < 5; i++) {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
+        const b = -Math.PI / 2 + (((i * 2 + 2) % 10) * Math.PI) / 5;
+        line(
+          0.5 + 0.25 * Math.cos(a),
+          0.5 + 0.25 * Math.sin(a),
+          0.5 + 0.25 * Math.cos(b),
+          0.5 + 0.25 * Math.sin(b),
+        );
+      }
+      break;
+    case "square":
+      rect(0.3, 0.25, 0.4, 0.5);
+      break;
+    case "book":
+      rect(0.25, 0.25, 0.5, 0.5);
+      line(0.5, 0.25, 0.5, 0.75);
+      break;
+    case "dog":
+      circle(0.5, 0.52, 0.22);
+      circle(0.35, 0.38, 0.08);
+      circle(0.65, 0.38, 0.08);
+      break;
+    case "fish":
+      circle(0.46, 0.52, 0.18);
+      line(0.64, 0.52, 0.78, 0.38);
+      line(0.64, 0.52, 0.78, 0.66);
+      circle(0.39, 0.48, 0.025);
+      break;
+    default:
+      circle(0.5, 0.5, 0.22);
+      line(0.32, 0.72, 0.68, 0.72);
+      break;
   }
   ctx.restore();
 }

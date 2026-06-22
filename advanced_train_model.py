@@ -51,6 +51,11 @@ from config import (
     DATA_DIR, MODELS_DIR, RESULTS_DIR,
     TRAIN_PER_CLASS, VAL_PER_CLASS, TEST_PER_CLASS, SAMPLES_PER_CLASS,
 )
+from mlflow_utils import (
+    start_mlflow_run, log_params, log_metrics, log_model,
+    end_mlflow_run, log_training_artifacts,
+)
+from repro import collect_environment
 
 REPORTS_DIR = ROOT / "assets" / "reports" / "advanced_training"
 
@@ -459,6 +464,29 @@ def train_one_model(args: argparse.Namespace, model_name: str, x: np.ndarray, y:
     with (run_dir / "model_summary.txt").open("w", encoding="utf-8") as f:
         model.summary(print_fn=lambda line: f.write(line + "\n"))
 
+    # ==================== MLflow: bắt đầu run cho model này ====================
+    start_mlflow_run(
+        experiment_name="AirDrawVocab_AdvancedModels",
+        run_name=f"{model_name}_{args.epochs}ep",
+        tags={"model": model_name, "script": "advanced_train_model.py"},
+    )
+    log_params({
+        "model": model_name,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay,
+        "dropout": args.dropout,
+        "label_smoothing": args.label_smoothing,
+        "mixup_alpha": args.mixup_alpha,
+        "train_per_class": args.train_per_class,
+        "val_per_class": args.val_per_class,
+        "test_per_class": args.test_per_class,
+        "seed": args.seed,
+        **{f"env_{k}": v for k, v in collect_environment().items()},
+    })
+    # =========================================================================
+
     print(f"\n===== Training {model_name} =====")
     print(f"Reports: {run_dir}")
     history = model.fit(train_ds, validation_data=val_ds, epochs=args.epochs, verbose=1, callbacks=callbacks)
@@ -491,6 +519,20 @@ def train_one_model(args: argparse.Namespace, model_name: str, x: np.ndarray, y:
         )
     summary["best_model"] = str(best_path)
     summary["run_dir"] = str(run_dir)
+
+    # ==================== MLflow: log kết quả & kết thúc run ====================
+    log_metrics({
+        "accuracy": summary["accuracy"],
+        "top3_accuracy": summary["top3_accuracy"],
+        "precision_weighted": summary["precision_weighted"],
+        "recall_weighted": summary["recall_weighted"],
+        "f1_weighted": summary["f1_weighted"],
+    })
+    log_model(model, model_name=model_name)
+    log_training_artifacts(history, run_dir)
+    end_mlflow_run()
+    # ==========================================================================
+
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return summary
 

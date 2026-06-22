@@ -1,0 +1,8 @@
+{
+  "status": "done",
+  "message": "Self-improved image model trained",
+  "mode": "image",
+  "samples": 15201,
+  "classes": 19,
+  "model": "C:\\Users\\Admin\\Downloads\\AirDrawVocab\\models\\airdrawvocab_self_improved.keras"
+}

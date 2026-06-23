@@ -58,10 +58,13 @@ AirDrawVocab_Unified_AI/
 │   └── samples/                       # Mẫu khuôn mặt sau khi đăng ký
 ├── docs/                              # Tài liệu hướng dẫn bổ sung
 ├── game.py                            # Game desktop Pygame
-├── train_model.py                     # Train CNN cơ bản
-├── advanced_train_model.py            # Train nâng cao: ResNet, EfficientNet, MobileNet
-├── baseline_model.py                  # Baseline NearestCentroid để so sánh
-├── evaluate_model.py                  # Đánh giá model trên tập test
+├── src/                               # Mã nguồn ML (Phase 1 - chuẩn hóa cấu trúc)
+│   ├── training/                      # train_clean, train_best, advanced_train_model,
+│   │                                  #   train_model, baseline_model, train_stroke_model,
+│   │                                  #   self_improve_retrain
+│   ├── evaluation/                    # evaluate_model, error_analysis, compare_models
+│   ├── data/                          # data_utils
+│   └── utils/                         # mlflow_utils, repro, model_versioning
 ├── face_auth.py                       # Module nhận diện khuôn mặt (LBPH)
 ├── face_cli.py                        # CLI đăng ký/xác thực mặt
 ├── ai_assistant.py                    # Chatbot offline trong game
@@ -285,7 +288,7 @@ Lưu ý: tạo ảnh photorealistic cần internet, API key hợp lệ và có t
 Chạy baseline truyền thống để có mốc so sánh với CNN:
 
 ```bat
-python baseline_model.py
+python src/training/baseline_model.py
 ```
 
 Baseline dùng `NearestCentroid` trên vector pixel 28x28 và xuất kết quả vào:
@@ -300,7 +303,7 @@ assets/results/baseline_confusion_matrix.png
 Train lại CNN và xuất đầy đủ báo cáo thực nghiệm:
 
 ```bat
-python train_model.py
+python src/training/train_model.py
 ```
 
 Script train mới dùng split cố định **800 train / 150 validation / 150 test mỗi lớp**, có `EarlyStopping`, `ReduceLROnPlateau`, `ModelCheckpoint` và lưu:
@@ -334,13 +337,13 @@ Lệnh này tải một phần nhỏ mỗi lớp (~6MB/lớp) vào `data/npy_28/
 ### Bước 2: train (đã tối ưu tốc độ, ~8–12 phút trên CPU)
 
 ```bat
-.\.venv311\Scripts\python.exe train_clean.py
+.\.venv311\Scripts\python.exe src/training/train_clean.py
 ```
 
 Mặc định: 2000 mẫu/lớp, batch 512, early stopping sớm, dùng hết nhân CPU → train nhanh mà vẫn đạt ~93–94%. Muốn chính xác hơn (chậm hơn) thì tăng dữ liệu:
 
 ```bat
-.\.venv311\Scripts\python.exe train_clean.py --train-per-class 4000 --val-per-class 600 --test-per-class 600 --epochs 22
+.\.venv311\Scripts\python.exe src/training/train_clean.py --train-per-class 4000 --val-per-class 600 --test-per-class 600 --epochs 22
 ```
 
 Sau khi train xong, model lưu vào `models/airdrawvocab_best_advanced.keras` và `models/categories.json` được đồng bộ tự động. Khởi động lại web để nạp model mới.
@@ -348,14 +351,14 @@ Sau khi train xong, model lưu vào `models/airdrawvocab_best_advanced.keras` v�
 ### (Tham khảo) script nâng cao cũ — KHÔNG khuyến nghị do còn lỗi BatchNorm
 
 ```bat
-python advanced_train_model.py --model resnet_sketch --epochs 60 --batch-size 64
+python src/training/advanced_train_model.py --model resnet_sketch --epochs 60 --batch-size 64
 ```
 
 Nếu dùng Windows, cách dễ nhất là chạy:
 
 ```bat
 setup_training_env.bat
-python advanced_train_model.py --model resnet_sketch --epochs 60 --batch-size 64
+python src/training/advanced_train_model.py --model resnet_sketch --epochs 60 --batch-size 64
 ```
 
 Model mặc định `resnet_sketch` là residual CNN tối ưu cho dữ liệu QuickDraw 28x28 grayscale. Đây là lựa chọn phù hợp nhất cho project vì:
@@ -368,7 +371,7 @@ Model mặc định `resnet_sketch` là residual CNN tối ưu cho dữ liệu Q
 Nếu muốn so sánh với các model phổ biến hiện nay:
 
 ```bat
-python advanced_train_model.py --model all --epochs 40 --batch-size 64
+python src/training/advanced_train_model.py --model all --epochs 40 --batch-size 64
 ```
 
 Các model được hỗ trợ:
@@ -394,13 +397,13 @@ assets/reports/advanced_training/<run_id>/error_analysis.csv
 Gợi ý tối ưu nếu có GPU:
 
 ```bat
-python advanced_train_model.py --model resnet_sketch --epochs 100 --batch-size 128 --label-smoothing 0.03 --dropout 0.35
+python src/training/advanced_train_model.py --model resnet_sketch --epochs 100 --batch-size 128 --label-smoothing 0.03 --dropout 0.35
 ```
 
 Nếu thấy validation accuracy dao động hoặc overfit, thử bật MixUp:
 
 ```bat
-python advanced_train_model.py --model resnet_sketch --epochs 100 --mixup-alpha 0.1
+python src/training/advanced_train_model.py --model resnet_sketch --epochs 100 --mixup-alpha 0.1
 ```
 
 Lưu ý thực tế: không có model nào cam kết “cao nhất tuyệt đối” trên mọi lần train. Cách tốt nhất là train nhiều cấu hình, so sánh validation/test metrics và dùng checkpoint tốt nhất.
@@ -410,7 +413,7 @@ Lưu ý thực tế: không có model nào cam kết “cao nhất tuyệt đố
 Môi trường `.venv311` đã được tạo và kiểm tra thành công. Model mới đã được train bằng:
 
 ```bat
-.\.venv311\Scripts\python.exe advanced_train_model.py --model resnet_sketch --epochs 12 --batch-size 128 --patience 5 --deploy-threshold 0.99
+.\.venv311\Scripts\python.exe src/training/advanced_train_model.py --model resnet_sketch --epochs 12 --batch-size 128 --patience 5 --deploy-threshold 0.99
 ```
 
 Kết quả đánh giá độc lập:

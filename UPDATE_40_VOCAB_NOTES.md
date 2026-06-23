@@ -20,7 +20,7 @@ Các file đã cập nhật:
 
 ```bat
 python dev_download_quickdraw.py
-python train_best.py
+python src/training/train_best.py
 ```
 
 Sau khi train xong, kiểm tra `models/categories.json` phải có 40 nhãn và model output cuối phải là 40.

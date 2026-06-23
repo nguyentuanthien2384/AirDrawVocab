@@ -33,13 +33,13 @@ export MLFLOW_DISABLED=1
 
 | File | Vai trò |
 |------|---------|
-| `mlflow_utils.py` | Tiện ích log MLflow (graceful, tùy chọn) |
-| `repro.py` | `set_global_seed()` + `collect_environment()` |
-| `model_versioning.py` | Lưu bản model có version + metadata vào `models/versions/` |
-| `compare_models.py` | So sánh nhiều model trên tập test cố định |
+| `src/utils/mlflow_utils.py` | Tiện ích log MLflow (graceful, tùy chọn) |
+| `src/utils/repro.py` | `set_global_seed()` + `collect_environment()` |
+| `src/utils/model_versioning.py` | Lưu bản model có version + metadata vào `models/versions/` |
+| `src/evaluation/compare_models.py` | So sánh nhiều model trên tập test cố định |
 
-Các script train đã tích hợp sẵn: `train_clean.py`, `train_best.py`,
-`advanced_train_model.py`.
+Các script train đã tích hợp sẵn: `src/training/train_clean.py`,
+`src/training/train_best.py`, `src/training/advanced_train_model.py`.
 
 ---
 
@@ -48,35 +48,35 @@ Các script train đã tích hợp sẵn: `train_clean.py`, `train_best.py`,
 ### 3.1. CNN sạch (ổn định, nhanh)
 
 ```bash
-python train_clean.py --epochs 16 --train-per-class 2000 --val-per-class 400 --test-per-class 400
+python src/training/train_clean.py --epochs 16 --train-per-class 2000 --val-per-class 400 --test-per-class 400
 ```
 
 Test nhanh:
 
 ```bash
-python train_clean.py --epochs 2 --train-per-class 300 --val-per-class 100 --test-per-class 100
+python src/training/train_clean.py --epochs 2 --train-per-class 300 --val-per-class 100 --test-per-class 100
 ```
 
 ### 3.2. Model zoo hiện đại (ResNet-GN, ConvNeXt, CNN Wide GAP)
 
 ```bash
 # Train kiến trúc tốt nhất
-python train_best.py --model resnet_gn --per-class 16000 --epochs 50
+python src/training/train_best.py --model resnet_gn --per-class 16000 --epochs 50
 
 # Train & so sánh tất cả + ensemble
-python train_best.py --model all --per-class 12000 --epochs 45 --ensemble
+python src/training/train_best.py --model all --per-class 12000 --epochs 45 --ensemble
 
 # Kiểm thử nhanh, không cần mạng
-python train_best.py --smoke
+python src/training/train_best.py --smoke
 ```
 
 ### 3.3. Pipeline nâng cao (ResNet Sketch / EfficientNet / MobileNet)
 
 ```bash
-python advanced_train_model.py --model resnet_sketch --epochs 60
-python advanced_train_model.py --model all --epochs 40
+python src/training/advanced_train_model.py --model resnet_sketch --epochs 60
+python src/training/advanced_train_model.py --model all --epochs 40
 # smoke test
-python advanced_train_model.py --smoke-test
+python src/training/advanced_train_model.py --smoke-test
 ```
 
 > `advanced_train_model.py` tạo **một MLflow run cho mỗi model** khi chạy
@@ -133,13 +133,13 @@ for v in list_versions():
 
 ```bash
 # So sánh mọi model trong models/
-python compare_models.py
+python src/evaluation/compare_models.py
 
 # Gồm cả các bản version
-python compare_models.py --include-versions
+python src/evaluation/compare_models.py --include-versions
 
 # So sánh danh sách cụ thể
-python compare_models.py --models models/airdrawvocab_best_advanced.keras models/member_resnet_gn.keras
+python src/evaluation/compare_models.py --models models/airdrawvocab_best_advanced.keras models/member_resnet_gn.keras
 ```
 
 Kết quả: bảng xếp hạng in ra console + file CSV trong
@@ -158,14 +158,108 @@ Kết quả: bảng xếp hạng in ra console + file CSV trong
 
 ---
 
-## 8. Lộ trình tiếp theo (chưa làm)
+## 8. Phase 2 — Stroke BiGRU & Data Versioning
+
+### 8.1. Đặc trưng stroke dùng chung
+
+`stroke_features.py` (ở thư mục gốc) là **nguồn duy nhất** biến nét vẽ thành
+tensor, dùng chung cho cả train (`src/training/train_stroke_model.py`) và
+inference (`backend/app.py`) để tránh lệch train/inference.
+
+Bộ đặc trưng nâng cấp (9 chiều/điểm): `x, y, dx, dy, speed, dir_cos, dir_sin,
+pen_up, t` — thêm tốc độ, hướng di chuyển và cờ nhấc bút so với bản cũ (5 chiều).
+
+### 8.2. Train Stroke BiGRU (nâng cấp)
+
+```bash
+python src/training/train_stroke_model.py --epochs 30
+```
+
+Cải tiến: BiGRU 2 lớp lớn hơn + LayerNorm + recurrent dropout, label smoothing,
+**class weights** (cân bằng lớp), `ReduceLROnPlateau`, tích hợp MLflow
+(experiment `AirDrawVocab_Stroke`) + versioning + **báo cáo đánh giá**
+(per-class report + confusion matrix) lưu ở `assets/reports/stroke/`.
+
+> Lưu ý: nếu trước đó đã có `models/stroke_sequence_model.keras` train bằng bộ
+> đặc trưng cũ (5 chiều), cần train lại do đầu vào model giờ là 9 chiều.
+
+### 8.3. Data Versioning (manifest)
+
+```bash
+python src/data/data_versioning.py            # có SHA1
+python src/data/data_versioning.py --no-hash  # nhanh hơn
+```
+
+Ghi `data/dataset_manifest.json`: số mẫu/lớp, shape, dtype, SHA1 của từng file
+`.npy`, và thống kê `stroke_samples` trong SQLite. So sánh manifest theo thời
+gian để biết dữ liệu đã thay đổi thế nào.
+
+### 8.4. Benchmark test set cố định
+
+```bash
+python src/data/make_benchmark.py
+```
+
+Đóng băng tập test (từ split cố định) thành `data/benchmark/benchmark_test.npz`
++ manifest (SHA1, counts) để MỌI model so sánh trên CÙNG dữ liệu:
+
+```bash
+python src/evaluation/compare_models.py --benchmark data/benchmark/benchmark_test.npz
+```
+
+### 8.5. Test-Time Augmentation (TTA) tốt hơn
+
+`airdraw_models.predict_tta` nay dùng **lưới dịch tất định** (deterministic shift
+grid) thay vì random crop: tái lập được, bao phủ đều các hướng, lấp viền bằng 0
+(không tạo nét giả). Dùng trong `train_best.py` và `hard_negative_mining.py`.
+
+### 8.6. Hard Negative Mining (phân tích lỗi)
+
+```bash
+python src/evaluation/hard_negative_mining.py --top 150
+python src/evaluation/hard_negative_mining.py --benchmark data/benchmark/benchmark_test.npz --tta 6
+```
+
+Xuất ra `assets/reports/hard_negative/`: các mẫu sai tự tin nhất (CSV), **cặp lớp
+hay nhầm** (vd `leaf -> diamond`), và **lớp recall thấp** — định hướng bổ sung dữ
+liệu / oversample.
+
+### 8.7. Tiền xử lý ảnh dùng chung
+
+`image_preprocess.py` (gốc) là nguồn duy nhất cho tiền xử lý ảnh vẽ, dùng chung
+bởi `backend/app.py` (production) và các script đánh giá → không lệch
+production/evaluation. Hành vi mặc định **giữ nguyên** như backend cũ; có tùy chọn
+`deskew=True` (chỉnh nghiêng, mặc định tắt).
+
+---
+
+## 9. Lộ trình tiếp theo
 
 Theo kế hoạch trong Phase 1–3, các hạng mục còn lại:
 
-- **Phase 1 – Task 2**: Chuẩn hóa cấu trúc thư mục `src/` (training/inference/
-  data/evaluation/utils). *Chưa thực hiện* vì cần cập nhật đồng loạt import của
-  `backend/app.py`, `game.py`, `launcher.py`... — nên làm trong một bước riêng.
-- **Phase 2**: Data versioning, cải thiện Stroke BiGRU, evaluation pipeline mạnh,
-  TTA tốt hơn, hard-negative mining.
+- **Phase 1 – Task 2** *(ĐÃ XONG)*: Chuẩn hóa cấu trúc thư mục `src/`
+  (training/evaluation/data/utils). Các module dùng chung cho web/desktop
+  (`config.py`, `vocab_pairs.py`, `data_utils` nguồn, `airdraw_models.py`,
+  `ai_assistant.py`, `face_auth.py`, `sample_generator.py`) được giữ ở thư mục
+  gốc để không phá vỡ `backend/app.py`, `game.py`, `launcher.py` và deploy.
+- **Phase 2** *(ĐÃ XONG)*: ✅ Data versioning (manifest), ✅ cải thiện Stroke BiGRU
+  + feature engineering, ✅ evaluation per-class cho stroke, ✅ benchmark dataset cố
+  định, ✅ TTA tất định, ✅ hard-negative mining, ✅ tách tiền xử lý ảnh dùng chung.
 - **Phase 3**: Automated retraining, model registry, monitoring, testing, CI/CD,
   data drift detection.
+
+### Cấu trúc thư mục sau Task 2
+
+```
+src/
+├── training/      train_clean, train_best, advanced_train_model, train_model,
+│                  baseline_model, train_stroke_model, self_improve_retrain
+├── evaluation/    evaluate_model, error_analysis, compare_models
+├── data/          data_utils
+├── utils/         mlflow_utils, repro, model_versioning
+├── inference/     (sẽ bổ sung)
+└── models/        (sẽ bổ sung)
+```
+
+> Các script đã chuyển vào `src/` tự thêm thư mục gốc dự án vào `sys.path` nên
+> vẫn chạy được bằng `python src/training/<script>.py` từ thư mục gốc.

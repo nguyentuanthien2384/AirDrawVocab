@@ -22,13 +22,27 @@ import tensorflow as tf
 from tensorflow import keras
 from PIL import Image, ImageDraw
 
-ROOT = Path(__file__).resolve().parent
+# parents[2] vì file đã chuyển vào src/training/ (giữ ROOT trỏ về gốc dự án)
+ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = ROOT / "data" / "airdrawvocab_app.sqlite3"
 NPY_DIR = ROOT / "data" / "npy_28"
 MODELS_DIR = ROOT / "models"
 STATUS_PATH = ROOT / "data" / "retrain_status.json"
 CANVAS_W = 960
 CANVAS_H = 540
+
+# bootstrap: cho phép import vocab_pairs ở thư mục gốc
+import sys as _sys
+if str(ROOT) not in _sys.path:
+    _sys.path.insert(0, str(ROOT))
+
+# Backend chạy script này dạng subprocess -> ép UTF-8 để không crash 'charmap'
+# khi in tiếng Việt trên Windows.
+try:
+    _sys.stdout.reconfigure(encoding="utf-8")
+    _sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 try:
     from vocab_pairs import CATEGORIES as VOCAB_CATEGORIES

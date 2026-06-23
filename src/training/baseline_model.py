@@ -13,8 +13,14 @@ import seaborn as sns
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.neighbors import NearestCentroid
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path ---
+import sys as _sys
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 from config import CATEGORIES, RESULTS_DIR, REPORTS_DIR, RANDOM_STATE
-from data_utils import load_dataset, split_dataset
+from src.data.data_utils import load_dataset, split_dataset
 
 
 def main() -> int:

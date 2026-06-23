@@ -28,15 +28,22 @@ import requests
 import tensorflow as tf
 from tensorflow import keras
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path ---
+import os as _os
+import sys as _sys
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 from config import (CATEGORIES, NUM_CLASSES, DATA_DIR, MODELS_DIR, MODEL_PATH,
                     CATEGORIES_PATH, RANDOM_STATE)
 import airdraw_models as Z
 from urllib.parse import quote
-from mlflow_utils import (
+from src.utils.mlflow_utils import (
     start_mlflow_run, log_params, log_metrics, log_model, end_mlflow_run,
 )
-from repro import set_global_seed, collect_environment
-from model_versioning import save_versioned_model
+from src.utils.repro import set_global_seed, collect_environment
+from src.utils.model_versioning import save_versioned_model
 
 QD_URL = "https://storage.googleapis.com/quickdraw_dataset/full/numpy_bitmap/{}.npy"
 

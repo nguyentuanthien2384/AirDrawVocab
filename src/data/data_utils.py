@@ -3,6 +3,14 @@ Hàm dùng chung cho load và chia dữ liệu QuickDraw.
 Dùng bởi train_model.py, advanced_train_model.py, baseline_model.py, evaluate_model.py.
 """
 from __future__ import annotations
+
+# --- bootstrap: đảm bảo import được config ở thư mục gốc dự án ---
+import os as _os
+import sys as _sys
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 from config import CATEGORIES, DATA_DIR, TRAIN_PER_CLASS, VAL_PER_CLASS, TEST_PER_CLASS
 

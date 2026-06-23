@@ -22,7 +22,7 @@ import numpy as np
 from tensorflow import keras
 
 from config import CATEGORIES, NUM_CLASSES, ROOT, RANDOM_STATE
-from data_utils import load_dataset, split_dataset
+from src.data.data_utils import load_dataset, split_dataset
 
 try:
     from vocab_pairs import VI_MEANINGS as VI

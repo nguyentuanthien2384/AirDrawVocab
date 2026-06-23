@@ -8,7 +8,7 @@ Cung cấp:
 
 Dùng trong script train:
 
-    from repro import set_global_seed, collect_environment
+    from src.utils.repro import set_global_seed, collect_environment
     set_global_seed(42)
     env = collect_environment()   # dict, có thể log vào MLflow
 """

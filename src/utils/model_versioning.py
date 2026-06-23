@@ -11,7 +11,7 @@ ta lưu thêm một bản có version + metadata vào models/versions/ để d�
 
 Dùng:
 
-    from model_versioning import save_versioned_model
+    from src.utils.model_versioning import save_versioned_model
     info = save_versioned_model(
         model,
         base_name="resnet_sketch",
@@ -27,10 +27,16 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+# bootstrap: cho phép import config ở thư mục gốc dự án
+import sys as _sys
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_PROJECT_ROOT))
+
 try:
     from config import MODELS_DIR
 except Exception:  # fallback nếu chạy ngoài project
-    MODELS_DIR = Path(__file__).resolve().parent / "models"
+    MODELS_DIR = _PROJECT_ROOT / "models"
 
 VERSIONS_DIR = MODELS_DIR / "versions"
 

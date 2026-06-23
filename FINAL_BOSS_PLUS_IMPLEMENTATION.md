@@ -64,13 +64,13 @@ http://127.0.0.1:8000
 3. Train stroke model:
 
 ```bash
-python train_stroke_model.py --epochs 12
+python src/training/train_stroke_model.py --epochs 12
 ```
 
 4. Hoặc train image self-improved model:
 
 ```bash
-python self_improve_retrain.py --epochs 10
+python src/training/self_improve_retrain.py --epochs 10
 ```
 
 5. Copy/đổi model mới vào `models/` theo pipeline bạn chọn.

@@ -25,11 +25,17 @@ from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropou
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, ReduceLROnPlateau
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path ---
+import sys as _sys
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 from config import (
     CATEGORIES, NUM_CLASSES, RANDOM_STATE,
     DATA_DIR, RESULTS_DIR, REPORTS_DIR
 )
-from data_utils import load_dataset, split_dataset
+from src.data.data_utils import load_dataset, split_dataset
 
 print(f"TensorFlow: {tf.__version__} | GPU: {tf.config.list_physical_devices('GPU')}")
 

@@ -24,8 +24,15 @@ import numpy as np
 from sklearn.metrics import classification_report, confusion_matrix
 from tensorflow import keras
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path ---
+import os as _os
+import sys as _sys
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 from config import CATEGORIES, NUM_CLASSES, ROOT, RANDOM_STATE
-from data_utils import load_dataset, split_dataset
+from src.data.data_utils import load_dataset, split_dataset
 
 OUT_DIR = ROOT / "assets" / "reports" / "error_analysis"
 

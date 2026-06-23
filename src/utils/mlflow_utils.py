@@ -8,7 +8,7 @@ máy chưa cài MLflow.
 
 Cách dùng nhanh trong script train:
 
-    from mlflow_utils import (
+    from src.utils.mlflow_utils import (
         start_mlflow_run, log_params, log_metrics, log_model,
         end_mlflow_run, log_artifact, log_training_artifacts,
     )

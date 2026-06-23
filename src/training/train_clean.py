@@ -8,9 +8,8 @@ augmentation layers/BatchNorm trên Keras 3), script này:
 - Kiến trúc CNN gọn, BN ổn định.
 - Nhãn gán theo đúng thứ tự config.CATEGORIES => khớp models/categories.json.
 
-Chạy:
-    .\.venv311\Scripts\python.exe train_clean.py --epochs 18 \
-        --train-per-class 2000 --val-per-class 400 --test-per-class 400
+Chạy (từ thư mục gốc dự án):
+    python src/training/train_clean.py --epochs 18 --train-per-class 2000 --val-per-class 400 --test-per-class 400
 """
 from __future__ import annotations
 
@@ -33,15 +32,22 @@ try:
 except Exception:
     pass
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path để import config/airdraw_models ---
+import os as _os
+import sys as _sys
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 from config import (
     CATEGORIES, NUM_CLASSES, RANDOM_STATE,
     DATA_DIR, MODELS_DIR, CATEGORIES_PATH,
 )
-from mlflow_utils import (
+from src.utils.mlflow_utils import (
     start_mlflow_run, log_params, log_metrics, log_model, end_mlflow_run,
 )
-from repro import set_global_seed, collect_environment
-from model_versioning import save_versioned_model
+from src.utils.repro import set_global_seed, collect_environment
+from src.utils.model_versioning import save_versioned_model
 
 
 def load_split(train_pc: int, val_pc: int, test_pc: int, seed: int):

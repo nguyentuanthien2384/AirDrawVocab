@@ -46,16 +46,22 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path ---
+import sys as _sys
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+
 from config import (
     ROOT, CATEGORIES, NUM_CLASSES, RANDOM_STATE,
     DATA_DIR, MODELS_DIR, RESULTS_DIR,
     TRAIN_PER_CLASS, VAL_PER_CLASS, TEST_PER_CLASS, SAMPLES_PER_CLASS,
 )
-from mlflow_utils import (
+from src.utils.mlflow_utils import (
     start_mlflow_run, log_params, log_metrics, log_model,
     end_mlflow_run, log_training_artifacts,
 )
-from repro import collect_environment
+from src.utils.repro import collect_environment
 
 REPORTS_DIR = ROOT / "assets" / "reports" / "advanced_training"
 

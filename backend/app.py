@@ -1,5 +1,6 @@
 import json
 import os
+import csv
 import base64
 import hashlib
 import secrets
@@ -43,6 +44,13 @@ try:
 except Exception:
     _samplegen = None
 
+# Đặc trưng stroke dùng chung với train (src/training/train_stroke_model.py) để
+# train và inference KHÔNG bị lệch. Xem stroke_features.py.
+from stroke_features import strokes_to_batch as _strokes_to_batch
+# Tiền xử lý ảnh dùng chung (Phase 2, Task 15). Xem image_preprocess.py.
+from image_preprocess import preprocess_drawing as _preprocess_drawing
+from camera_face_strokes import analyze_face_frame_bytes, FACE_DETECTOR as FACE_STROKE_DETECTOR
+
 # Từ vựng mở rộng (40 lớp) + dịch nghĩa/câu ví dụ — nguồn từ vocab_pairs.py.
 try:
     from vocab_pairs import (
@@ -75,8 +83,242 @@ STROKE_MODEL_PATH = MODELS_DIR / "stroke_sequence_model.keras"
 STROKE_CATEGORIES_PATH = MODELS_DIR / "stroke_categories.json"
 RETRAIN_STATUS_PATH = ROOT / "data" / "retrain_status.json"
 EXPORTED_DATASET_DIR = ROOT / "data" / "self_improve_export"
+SELF_IMPROVED_MODEL_PATH = MODELS_DIR / "airdrawvocab_self_improved.keras"
+SELF_IMPROVED_CATEGORIES_PATH = MODELS_DIR / "categories_self_improved.json"
+TRAINING_MIN_CLASSES = int(os.getenv("TRAINING_MIN_CLASSES", "2"))
+TRAINING_MIN_SAMPLES_PER_CLASS = int(os.getenv("TRAINING_MIN_SAMPLES_PER_CLASS", "3"))
+TRAINING_MIN_TOTAL_SAMPLES = int(os.getenv("TRAINING_MIN_TOTAL_SAMPLES", "12"))
 CANVAS_W = 960
 CANVAS_H = 540
+
+# Face-aware camera support for the in-browser camera drawing mode.  This is
+# adapted from the DeepShieldAI-Pro face_detector.py pattern the user supplied:
+# OpenCV Haar cascade -> largest face -> padded crop/metadata.  The game uses it
+# as a lightweight quality/guide signal while MediaPipe FaceMesh draws strokes in
+# the browser.
+def _load_camera_face_detector():
+    try:
+        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+        detector = cv2.CascadeClassifier(str(cascade_path))
+        return detector if not detector.empty() else None
+    except Exception:
+        return None
+
+
+CAMERA_FACE_DETECTOR = _load_camera_face_detector()
+
+
+def _decode_upload_image_bgr(image_bytes: bytes) -> np.ndarray:
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None or frame.size == 0:
+        raise HTTPException(status_code=400, detail="Không đọc được frame camera.")
+    return frame
+
+
+def _detect_largest_camera_face(frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    if frame is None or frame.size == 0 or CAMERA_FACE_DETECTOR is None:
+        return None
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = CAMERA_FACE_DETECTOR.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(42, 42),
+    )
+    if len(faces) == 0:
+        return None
+    x, y, width, height = max(faces, key=lambda box: int(box[2]) * int(box[3]))
+    return int(x), int(y), int(width), int(height)
+
+
+def _crop_camera_face_or_frame(frame: np.ndarray, padding_ratio: float = 0.22) -> Tuple[np.ndarray, dict]:
+    box = _detect_largest_camera_face(frame)
+    if box is None:
+        return frame, {"faceDetected": False, "bbox": None}
+
+    x, y, width, height = box
+    pad_x = int(width * padding_ratio)
+    pad_y = int(height * padding_ratio)
+    max_y, max_x = frame.shape[:2]
+
+    left = max(0, x - pad_x)
+    top = max(0, y - pad_y)
+    right = min(max_x, x + width + pad_x)
+    bottom = min(max_y, y + height + pad_y)
+
+    crop = frame[top:bottom, left:right]
+    if crop.size == 0:
+        return frame, {"faceDetected": False, "bbox": None}
+
+    crop_width = int(right - left)
+    crop_height = int(bottom - top)
+    return crop, {
+        "faceDetected": True,
+        "bbox": {
+            "x": int(left),
+            "y": int(top),
+            "width": crop_width,
+            "height": crop_height,
+        },
+        "faceBbox": {
+            "x": int(x - left),
+            "y": int(y - top),
+            "width": int(width),
+            "height": int(height),
+        },
+        "cropSize": {
+            "width": crop_width,
+            "height": crop_height,
+        },
+    }
+
+
+def _camera_image_quality(frame: np.ndarray) -> dict:
+    if frame is None or frame.size == 0:
+        return {"brightness": 0, "contrast": 0, "sharpness": 0}
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    brightness = float(np.mean(gray))
+    contrast = float(np.std(gray))
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return {
+        "brightness": round(brightness, 2),
+        "contrast": round(contrast, 2),
+        "sharpness": round(sharpness, 2),
+    }
+
+
+def _camera_face_feedback(metadata: dict, frame_shape: Tuple[int, int, int], quality: dict) -> dict:
+    h, w = frame_shape[:2]
+    if not metadata.get("faceDetected"):
+        return {
+            "ready": False,
+            "status": "no_face",
+            "message": "Chưa thấy mặt. Đưa khuôn mặt vào giữa camera nếu muốn dùng Bút mặt.",
+            "faceAreaRatio": 0,
+            "centerOffset": 1,
+        }
+
+    bbox = metadata.get("bbox") or {}
+    area_ratio = float((bbox.get("width", 0) * bbox.get("height", 0)) / max(1, w * h))
+    cx = float((bbox.get("x", 0) + bbox.get("width", 0) / 2) / max(1, w))
+    cy = float((bbox.get("y", 0) + bbox.get("height", 0) / 2) / max(1, h))
+    center_offset = float(np.hypot(cx - 0.5, cy - 0.5))
+
+    brightness = float(quality.get("brightness") or 0)
+    sharpness = float(quality.get("sharpness") or 0)
+    if area_ratio < 0.045:
+        status = "too_far"
+        message = "Mặt hơi xa. Lại gần camera để nét Bút mặt ổn định hơn."
+    elif center_offset > 0.32:
+        status = "off_center"
+        message = "Mặt đang lệch khung. Đưa mặt vào giữa trước khi vẽ bằng mũi."
+    elif brightness < 55:
+        status = "too_dark"
+        message = "Ánh sáng hơi tối. Tăng sáng để nhận diện khuôn mặt tốt hơn."
+    elif sharpness < 18:
+        status = "blurry"
+        message = "Camera hơi mờ/rung. Giữ mặt ổn định để nét vẽ không giật."
+    else:
+        status = "ready"
+        message = "Mặt rõ. Có thể há miệng nhẹ để vẽ bằng đầu mũi."
+
+    return {
+        "ready": status == "ready",
+        "status": status,
+        "message": message,
+        "faceAreaRatio": round(area_ratio, 4),
+        "centerOffset": round(center_offset, 4),
+    }
+
+
+def _map_frame_to_canvas_point(
+    x: float,
+    y: float,
+    frame_w: int,
+    frame_h: int,
+    canvas_w: int,
+    canvas_h: int,
+    mirror: bool,
+    t: float,
+    source: str,
+) -> dict:
+    px = float(x) / max(1, frame_w) * canvas_w
+    py = float(y) / max(1, frame_h) * canvas_h
+    if mirror:
+        px = canvas_w - px
+    return {
+        "x": round(max(0.0, min(float(canvas_w), px)), 2),
+        "y": round(max(0.0, min(float(canvas_h), py)), 2),
+        "t": round(t, 2),
+        "source": source,
+    }
+
+
+def _ellipse_points(cx: float, cy: float, rx: float, ry: float, start: float, end: float, steps: int) -> List[Tuple[float, float]]:
+    if steps <= 1:
+        steps = 2
+    angles = np.linspace(start, end, steps)
+    return [(float(cx + rx * np.cos(a)), float(cy + ry * np.sin(a))) for a in angles]
+
+
+def _opencv_face_strokes(
+    metadata: dict,
+    frame_w: int,
+    frame_h: int,
+    canvas_w: int,
+    canvas_h: int,
+    mirror: bool,
+) -> Tuple[List[List[dict]], dict]:
+    bbox = metadata.get("bbox") or {}
+    face_rel = metadata.get("faceBbox") or {}
+    if not bbox or not face_rel:
+        return [], {}
+
+    fx = float(bbox.get("x", 0) + face_rel.get("x", 0))
+    fy = float(bbox.get("y", 0) + face_rel.get("y", 0))
+    fw = float(face_rel.get("width", 0))
+    fh = float(face_rel.get("height", 0))
+    if fw <= 1 or fh <= 1:
+        return [], {}
+
+    cx = fx + fw / 2
+    cy = fy + fh / 2
+    specs = [
+        ("face-opencv-oval", _ellipse_points(cx, cy + fh * 0.04, fw * 0.55, fh * 0.66, 0, 2 * np.pi, 42)),
+        ("face-opencv-left-eye", _ellipse_points(fx + fw * 0.34, fy + fh * 0.42, fw * 0.095, fh * 0.045, 0, 2 * np.pi, 18)),
+        ("face-opencv-right-eye", _ellipse_points(fx + fw * 0.66, fy + fh * 0.42, fw * 0.095, fh * 0.045, 0, 2 * np.pi, 18)),
+        ("face-opencv-left-brow", [(fx + fw * 0.22, fy + fh * 0.32), (fx + fw * 0.34, fy + fh * 0.27), (fx + fw * 0.46, fy + fh * 0.32)]),
+        ("face-opencv-right-brow", [(fx + fw * 0.54, fy + fh * 0.32), (fx + fw * 0.66, fy + fh * 0.27), (fx + fw * 0.78, fy + fh * 0.32)]),
+        ("face-opencv-nose", [(cx, fy + fh * 0.43), (fx + fw * 0.47, fy + fh * 0.55), (fx + fw * 0.43, fy + fh * 0.62), (cx, fy + fh * 0.66), (fx + fw * 0.57, fy + fh * 0.62), (fx + fw * 0.53, fy + fh * 0.55), (cx, fy + fh * 0.43)]),
+        ("face-opencv-mouth", _ellipse_points(cx, fy + fh * 0.76, fw * 0.19, fh * 0.07, 0.05 * np.pi, 0.95 * np.pi, 18)),
+        ("face-opencv-mouth-lower", _ellipse_points(cx, fy + fh * 0.76, fw * 0.19, fh * 0.055, 1.05 * np.pi, 1.95 * np.pi, 18)),
+    ]
+
+    strokes: List[List[dict]] = []
+    t = 0.0
+    for source, pts in specs:
+        stroke = []
+        for i, (x, y) in enumerate(pts):
+            stroke.append(_map_frame_to_canvas_point(x, y, frame_w, frame_h, canvas_w, canvas_h, mirror, t + i * 8, source))
+        if len(stroke) >= 2:
+            strokes.append(stroke)
+        t += 240
+
+    canvas_bbox_x = fx / max(1, frame_w) * canvas_w
+    canvas_bbox_y = fy / max(1, frame_h) * canvas_h
+    canvas_bbox_w = fw / max(1, frame_w) * canvas_w
+    canvas_bbox_h = fh / max(1, frame_h) * canvas_h
+    if mirror:
+        canvas_bbox_x = canvas_w - canvas_bbox_x - canvas_bbox_w
+    canvas_bbox = {
+        "x": round(max(0.0, min(float(canvas_w), canvas_bbox_x)), 2),
+        "y": round(max(0.0, min(float(canvas_h), canvas_bbox_y)), 2),
+        "width": round(max(1.0, min(float(canvas_w), canvas_bbox_w)), 2),
+        "height": round(max(1.0, min(float(canvas_h), canvas_bbox_h)), 2),
+    }
+    return strokes, canvas_bbox
+
 
 # Test-Time Augmentation: trung bình dự đoán trên ảnh gốc + vài bản dịch nhẹ.
 # Tăng độ chính xác/ổn định ~0.3-1% mà không cần train lại. Tắt: USE_TTA=0
@@ -273,6 +515,34 @@ def init_app_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS training_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                message TEXT NOT NULL DEFAULT '',
+                pid INTEGER,
+                epochs INTEGER NOT NULL DEFAULT 0,
+                samples INTEGER NOT NULL DEFAULT 0,
+                classes INTEGER NOT NULL DEFAULT 0,
+                log_path TEXT NOT NULL DEFAULT '',
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+
+        def ensure_column(table: str, column: str, ddl: str) -> None:
+            cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+        ensure_column("stroke_samples", "judge_json", "judge_json TEXT NOT NULL DEFAULT '{}'")
+        ensure_column("stroke_samples", "manual", "manual INTEGER NOT NULL DEFAULT 0")
+        ensure_column("stroke_samples", "point_count", "point_count INTEGER NOT NULL DEFAULT 0")
 
 
 def password_hash(password: str, salt: str) -> str:
@@ -330,6 +600,7 @@ init_app_db()
 # -----------------------------
 retrain_lock = threading.Lock()
 retrain_process: Optional[subprocess.Popen] = None
+retrain_job_id: Optional[int] = None
 stroke_sequence_model = None
 stroke_sequence_categories: List[str] = []
 
@@ -355,6 +626,165 @@ def _read_retrain_status() -> dict:
         return {"status": "unknown", "message": "Không đọc được trạng thái retrain.", "updated_at": None}
 
 
+def _safe_json_loads(value: Any, fallback: Any) -> Any:
+    if value is None:
+        return fallback
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(str(value))
+    except Exception:
+        return fallback
+
+
+def _count_stroke_points(strokes: Any) -> int:
+    strokes = _safe_json_loads(strokes, [])
+    if not isinstance(strokes, list):
+        return 0
+    count = 0
+    for stroke in strokes:
+        if isinstance(stroke, list):
+            count += sum(1 for p in stroke if isinstance(p, dict))
+    return count
+
+
+def _tail_file(path: Any, max_lines: int = 14, max_chars: int = 5000) -> str:
+    if not path:
+        return ""
+    file_path = Path(str(path))
+    if not file_path.exists():
+        return ""
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    lines = text.splitlines()[-max_lines:]
+    tail = "\n".join(lines)
+    return tail[-max_chars:]
+
+
+def _quickdraw_class_count() -> int:
+    if not _DATA_DIR.exists():
+        return 0
+    count = 0
+    for label in all_vocab_categories:
+        if (_DATA_DIR / f"{label}.npy").exists() or (_DATA_DIR / f"{label.replace(' ', '_')}.npy").exists():
+            count += 1
+    return count
+
+
+def _training_readiness(user_id: Optional[int] = None) -> dict:
+    where = ""
+    params: Tuple[Any, ...] = ()
+    if user_id is not None:
+        where = "WHERE user_id = ?"
+        params = (user_id,)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT target, COUNT(*) AS samples,
+                   COALESCE(SUM(correct), 0) AS correct_samples,
+                   ROUND(COALESCE(AVG(confidence), 0) * 100, 1) AS avg_confidence,
+                   MAX(created_at) AS last_seen
+            FROM stroke_samples
+            {where}
+            GROUP BY target
+            ORDER BY samples DESC, target ASC
+            """,
+            params,
+        ).fetchall()
+    labels = [dict(r) for r in rows]
+    total_samples = int(sum(int(r["samples"]) for r in labels))
+    class_count = len(labels)
+    min_samples = min([int(r["samples"]) for r in labels], default=0)
+    max_samples = max([int(r["samples"]) for r in labels], default=0)
+    quickdraw_classes = _quickdraw_class_count()
+    ready_stroke = (
+        class_count >= TRAINING_MIN_CLASSES
+        and total_samples >= TRAINING_MIN_TOTAL_SAMPLES
+        and min_samples >= TRAINING_MIN_SAMPLES_PER_CLASS
+    )
+    ready_image = total_samples >= TRAINING_MIN_TOTAL_SAMPLES or quickdraw_classes >= TRAINING_MIN_CLASSES
+    missing_for_stroke = {
+        "classes": max(0, TRAINING_MIN_CLASSES - class_count),
+        "total_samples": max(0, TRAINING_MIN_TOTAL_SAMPLES - total_samples),
+        "samples_per_class": max(0, TRAINING_MIN_SAMPLES_PER_CLASS - min_samples) if class_count else TRAINING_MIN_SAMPLES_PER_CLASS,
+    }
+    return {
+        "total_samples": total_samples,
+        "classes": class_count,
+        "min_samples_per_class": min_samples,
+        "max_samples_per_class": max_samples,
+        "quickdraw_classes": quickdraw_classes,
+        "ready_stroke": ready_stroke,
+        "ready_image": ready_image,
+        "requirements": {
+            "min_classes": TRAINING_MIN_CLASSES,
+            "min_samples_per_class": TRAINING_MIN_SAMPLES_PER_CLASS,
+            "min_total_samples": TRAINING_MIN_TOTAL_SAMPLES,
+        },
+        "missing_for_stroke": missing_for_stroke,
+        "label_summary": labels,
+    }
+
+
+def _practice_tip(label: str) -> str:
+    hint = _DRAWING_HINTS.get(label) or "Vẽ hình lớn ở giữa khung, nét bao chính rõ, thêm 1-2 chi tiết nhận dạng."
+    if label == "book":
+        return "Vẽ bìa chữ nhật, gáy sách ở giữa và vài đường trang bên trong để tránh bị nhầm với door."
+    if label == "door":
+        return "Vẽ khung cửa, tay nắm tròn ở một bên và các ô/panel cửa rõ để tách khỏi book/square."
+    if label == "pants":
+        return "Vẽ cạp quần, hai ống tách nhau và đường đáy quần rõ; tránh chỉ vẽ một hình chữ nhật."
+    if label == "leaf":
+        return "Vẽ cuống, gân giữa và vài gân phụ; hình lá nên thuôn ở hai đầu."
+    return hint
+
+
+def _quality_band(accuracy: float, attempts: int) -> str:
+    if attempts <= 0:
+        return "new"
+    if accuracy >= 80:
+        return "strong"
+    if accuracy >= 50:
+        return "learning"
+    return "needs_practice"
+
+
+def _update_training_job(job_id: Optional[int], status: str, message: str = "") -> None:
+    if not job_id:
+        return
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """
+                UPDATE training_jobs
+                SET status = ?, message = ?, finished_at = COALESCE(finished_at, ?)
+                WHERE id = ?
+                """,
+                (status, message, _now_iso(), int(job_id)),
+            )
+    except Exception:
+        pass
+
+
+def _recent_training_jobs(limit: int = 5) -> List[dict]:
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, mode, status, message, pid, epochs, samples, classes, log_path, started_at, finished_at
+                FROM training_jobs
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
 def _load_stroke_sequence_model():
     global stroke_sequence_model, stroke_sequence_categories
     if stroke_sequence_model is not None:
@@ -370,40 +800,13 @@ def _load_stroke_sequence_model():
 
 
 def _flatten_strokes(strokes: Any, max_len: int = 96) -> np.ndarray:
-    points = []
-    if isinstance(strokes, str):
-        try:
-            strokes = json.loads(strokes)
-        except Exception:
-            strokes = []
-    if not isinstance(strokes, list):
-        strokes = []
-    for stroke in strokes:
-        if not isinstance(stroke, list):
-            continue
-        for p in stroke:
-            if isinstance(p, dict):
-                points.append([float(p.get("x", 0)), float(p.get("y", 0)), float(p.get("t", 0))])
-    if not points:
-        return np.zeros((1, max_len, 5), dtype="float32")
-    arr = np.array(points, dtype="float32")
-    x = arr[:, 0] / max(CANVAS_W, 1)
-    y = arr[:, 1] / max(CANVAS_H, 1)
-    t = arr[:, 2]
-    if t.max() > t.min():
-        t = (t - t.min()) / (t.max() - t.min())
-    else:
-        t = np.zeros_like(t)
-    dx = np.concatenate([[0], np.diff(x)])
-    dy = np.concatenate([[0], np.diff(y)])
-    seq = np.stack([x, y, dx, dy, t], axis=1)
-    if len(seq) >= max_len:
-        idx = np.linspace(0, len(seq) - 1, max_len).astype(int)
-        seq = seq[idx]
-    else:
-        pad = np.zeros((max_len - len(seq), 5), dtype="float32")
-        seq = np.vstack([seq, pad])
-    return seq.reshape(1, max_len, 5).astype("float32")
+    """Biến strokes -> tensor (1, MAX_LEN, NUM_FEATURES) cho stroke model.
+
+    Delegate sang stroke_features.strokes_to_batch để dùng đúng bộ đặc trưng
+    đã train (tránh lệch train/inference). `max_len` giữ lại cho tương thích
+    chữ ký cũ nhưng độ dài thực tế lấy từ stroke_features.MAX_LEN.
+    """
+    return _strokes_to_batch(strokes, canvas_w=CANVAS_W, canvas_h=CANVAS_H)
 
 
 class PvPRoomManager:
@@ -411,11 +814,15 @@ class PvPRoomManager:
         self.rooms: Dict[str, List[WebSocket]] = {}
         self.meta: Dict[WebSocket, dict] = {}
 
+    @staticmethod
+    def normalize_room(room: str) -> str:
+        return (room or "default").strip().lower() or "default"
+
     async def connect(self, room: str, websocket: WebSocket, username: str):
         await websocket.accept()
-        room = room.strip().lower() or "default"
+        room = self.normalize_room(room)
         self.rooms.setdefault(room, []).append(websocket)
-        self.meta[websocket] = {"room": room, "username": username, "score": 0}
+        self.meta[websocket] = {"room": room, "username": username, "score": 0, "level": 1, "target": ""}
         await self.broadcast(room, {"type": "system", "message": f"{username} joined room {room}.", "players": self.players(room)})
 
     def disconnect(self, websocket: WebSocket):
@@ -427,15 +834,31 @@ class PvPRoomManager:
             self.rooms[room].remove(websocket)
         return meta
 
+    def update_player(self, websocket: WebSocket, payload: dict) -> dict:
+        meta = self.meta.setdefault(websocket, {"room": "default", "username": "guest", "score": 0, "level": 1, "target": ""})
+        for key in ("score", "level"):
+            if key in payload:
+                try:
+                    meta[key] = int(payload.get(key) or 0)
+                except Exception:
+                    pass
+        if payload.get("target"):
+            meta["target"] = str(payload.get("target"))[:64]
+        if payload.get("label"):
+            meta["last_prediction"] = str(payload.get("label"))[:64]
+        return meta
+
     def players(self, room: str) -> List[dict]:
+        room = self.normalize_room(room)
         players = []
         for ws in self.rooms.get(room, []):
             item = dict(self.meta.get(ws, {}))
             item.pop("room", None)
             players.append(item)
-        return players
+        return sorted(players, key=lambda p: (-int(p.get("score") or 0), str(p.get("username") or "")))
 
     async def broadcast(self, room: str, payload: dict):
+        room = self.normalize_room(room)
         dead = []
         for ws in self.rooms.get(room, []):
             try:
@@ -471,6 +894,10 @@ live_drawing_model = model
 if LIVE_DRAWING_MODEL_PATH != MODEL_PATH:
     live_drawing_model = load_model(LIVE_DRAWING_MODEL_PATH, compile=False)
 
+ACTIVE_MODEL_PATH = MODEL_PATH
+ACTIVE_LIVE_MODEL_PATH = LIVE_DRAWING_MODEL_PATH
+ACTIVE_CATEGORIES_PATH = CATEGORIES_PATH
+
 
 def _output_class_count(active_model) -> int:
     """Lấy số lớp output thực tế của model để tránh lệch nhãn khi vocab đã mở rộng."""
@@ -496,6 +923,53 @@ categories: List[str] = list(trained_categories_raw[:PREDICTION_CLASS_COUNT])
 all_vocab_categories: List[str] = list(_ALL_VOCAB_CATEGORIES or trained_categories_raw)
 recognition_category_set = set(categories)
 all_vocab_category_set = set(all_vocab_categories)
+
+
+def _runtime_model_info() -> dict:
+    return {
+        "model_path": str(ACTIVE_MODEL_PATH),
+        "live_model_path": str(ACTIVE_LIVE_MODEL_PATH),
+        "categories_path": str(ACTIVE_CATEGORIES_PATH),
+        "num_recognition_categories": len(categories),
+        "model_output_classes": MODEL_OUTPUT_CLASSES,
+        "live_model_output_classes": LIVE_MODEL_OUTPUT_CLASSES,
+    }
+
+
+def _reload_image_runtime(model_path: Path, categories_path: Path) -> dict:
+    """Nạp model ảnh mới sau khi Train image mà không cần tắt server."""
+    global model, live_drawing_model, trained_categories_raw, categories, recognition_category_set
+    global MODEL_OUTPUT_CLASSES, LIVE_MODEL_OUTPUT_CLASSES, PREDICTION_CLASS_COUNT
+    global ACTIVE_MODEL_PATH, ACTIVE_LIVE_MODEL_PATH, ACTIVE_CATEGORIES_PATH
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Không tìm thấy model: {model_path}")
+    if not categories_path.exists():
+        raise FileNotFoundError(f"Không tìm thấy categories: {categories_path}")
+    new_categories = json.loads(categories_path.read_text(encoding="utf-8"))
+    if not isinstance(new_categories, list) or not new_categories:
+        raise ValueError("File categories không hợp lệ.")
+
+    new_model = load_model(model_path, compile=False)
+    new_class_count = _output_class_count(new_model)
+    usable_count = min(new_class_count, len(new_categories))
+    if usable_count <= 0:
+        raise ValueError("Model mới không có lớp output hợp lệ.")
+
+    model = new_model
+    live_drawing_model = new_model
+    trained_categories_raw = list(new_categories)
+    MODEL_OUTPUT_CLASSES = new_class_count
+    LIVE_MODEL_OUTPUT_CLASSES = new_class_count
+    PREDICTION_CLASS_COUNT = usable_count
+    categories = list(trained_categories_raw[:usable_count])
+    recognition_category_set = set(categories)
+    ACTIVE_MODEL_PATH = model_path
+    ACTIVE_LIVE_MODEL_PATH = model_path
+    ACTIVE_CATEGORIES_PATH = categories_path
+    return _runtime_model_info()
+
+
 face_auth = FaceAuthManager(PROJECT_ROOT / "face_data")
 
 if FRONTEND_DIR.exists():
@@ -582,10 +1056,17 @@ def health():
         "model_output_classes": MODEL_OUTPUT_CLASSES,
         "live_model_output_classes": LIVE_MODEL_OUTPUT_CLASSES,
         "model_input_shape": str(getattr(model, "input_shape", "unknown")),
-        "model_path": str(MODEL_PATH),
-        "live_drawing_model_path": str(LIVE_DRAWING_MODEL_PATH),
+        "model_path": str(ACTIVE_MODEL_PATH),
+        "live_drawing_model_path": str(ACTIVE_LIVE_MODEL_PATH),
+        "categories_path": str(ACTIVE_CATEGORIES_PATH),
+        "self_improved_model_exists": SELF_IMPROVED_MODEL_PATH.exists(),
         "app_db_path": str(APP_DB_PATH),
         "face_model_exists": (PROJECT_ROOT / "face_data" / "lbph_face_model.yml").exists(),
+        "camera_face_strokes": {
+            "available": FACE_STROKE_DETECTOR is not None,
+            "detector": "browser FaceMesh + OpenCV Haar fallback",
+            "endpoint": "/camera/face-strokes",
+        },
         "image_generation": {
             "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
             "openai_enabled": OPENAI_IMAGE_ENABLED,
@@ -717,63 +1198,15 @@ def samples_multiple(count: int = 15, seed: int = 1):
 
 
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
-    """Chuyển ảnh canvas/user upload về đúng input model: 28x28 grayscale, nền đen nét trắng."""
+    """Chuyển ảnh canvas/user upload về đúng input model: 28x28 grayscale, nền đen nét trắng.
+
+    Logic dùng chung ở image_preprocess.preprocess_drawing để backend và các script
+    đánh giá preprocess giống hệt nhau (tránh lệch production/evaluation).
+    """
     try:
-        image = Image.open(BytesIO(image_bytes)).convert("RGBA")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="File gửi lên không phải ảnh hợp lệ.") from exc
-
-    rgba = np.array(image)
-
-    # Nếu ảnh có alpha, ghép lên nền trắng để xử lý ổn định.
-    rgb = rgba[:, :, :3].astype(np.uint8)
-    alpha = rgba[:, :, 3:4].astype(np.float32) / 255.0
-    white = np.full_like(rgb, 255, dtype=np.uint8)
-    rgb = (rgb.astype(np.float32) * alpha + white.astype(np.float32) * (1 - alpha)).astype(np.uint8)
-
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-
-    # Frontend thường là nền trắng, nét đen. Dataset/model dùng nền đen, nét trắng.
-    # Nếu ảnh trung bình sáng thì đảo màu.
-    if float(gray.mean()) > 127:
-        gray = 255 - gray
-
-    # Cắt sát vùng có nét vẽ.
-    _, thresh = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
-    coords = cv2.findNonZero(thresh)
-
-    if coords is None:
-        # Không có nét vẽ -> trả ảnh đen để model không đoán bừa.
-        return np.zeros((1, 28, 28, 1), dtype="float32")
-
-    x, y, w, h = cv2.boundingRect(coords)
-    gray = gray[y:y + h, x:x + w]
-
-    # Scale nét vẽ vừa khung 20x20 (giữ tỉ lệ), giống chuẩn MNIST/QuickDraw bitmap.
-    target = 20
-    scale = target / max(w, h, 1)
-    new_w = max(1, int(round(w * scale)))
-    new_h = max(1, int(round(h * scale)))
-    resized = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    # Đặt vào canvas 28x28 rồi căn theo trọng tâm (center of mass) ra chính giữa.
-    canvas = np.zeros((28, 28), dtype=np.uint8)
-    y_start = (28 - new_h) // 2
-    x_start = (28 - new_w) // 2
-    canvas[y_start:y_start + new_h, x_start:x_start + new_w] = resized
-
-    moments = cv2.moments(canvas, binaryImage=False)
-    if moments["m00"] > 0:
-        cx = moments["m10"] / moments["m00"]
-        cy = moments["m01"] / moments["m00"]
-        shift_x = int(round(13.5 - cx))
-        shift_y = int(round(13.5 - cy))
-        translation = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
-        canvas = cv2.warpAffine(canvas, translation, (28, 28), borderValue=0)
-
-    normalized = canvas.astype("float32") / 255.0
-    normalized = np.expand_dims(normalized, axis=(0, -1))
-    return normalized
+        return _preprocess_drawing(image_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _image_to_rgb_array(image_bytes: bytes) -> np.ndarray:
@@ -1110,8 +1543,8 @@ async def predict(request: Request, file: UploadFile = File(...), source: str = 
     x = preprocess_image(image_bytes)
     enhanced_drawing = enhance_drawing_image(image_bytes)
     normalized_source = source.strip().lower()
-    active_model = live_drawing_model if normalized_source in {"camera", "hand", "airdraw", "live"} else model
-    active_model_path = LIVE_DRAWING_MODEL_PATH if active_model is live_drawing_model else MODEL_PATH
+    active_model = live_drawing_model if normalized_source in {"camera", "camera-hand", "camera-face", "face", "hand", "airdraw", "live"} else model
+    active_model_path = ACTIVE_LIVE_MODEL_PATH if active_model is live_drawing_model else ACTIVE_MODEL_PATH
     preds = predict_proba(active_model, x)
 
     usable_count = min(len(preds), len(categories))
@@ -1209,7 +1642,7 @@ async def predict_godmode(
 
     x = preprocess_image(image_bytes)
     normalized_source = source.strip().lower()
-    active_model = live_drawing_model if normalized_source in {"camera", "hand", "airdraw", "live", "realtime"} else model
+    active_model = live_drawing_model if normalized_source in {"camera", "camera-hand", "camera-face", "face", "hand", "airdraw", "live", "realtime"} else model
     preds = predict_proba(active_model, x)
     usable_count = min(len(preds), len(categories))
     if usable_count <= 0:
@@ -1235,6 +1668,39 @@ async def predict_godmode(
     }
 
 
+@app.post("/camera/face/analyze")
+async def camera_face_analyze(file: UploadFile = File(...)):
+    """Nhận diện khuôn mặt từ frame camera để hỗ trợ Bút mặt.
+
+    Endpoint này port ý tưởng từ DeepShieldAI-Pro: dùng OpenCV Haar cascade để
+    tìm mặt lớn nhất, crop có padding, trả bbox + chất lượng ảnh. Frontend dùng
+    metadata này để báo người chơi mặt đang rõ/xa/tối/mờ khi vẽ bằng camera.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Bạn chưa gửi frame camera.")
+
+    frame = _decode_upload_image_bgr(image_bytes)
+    face_crop, metadata = _crop_camera_face_or_frame(frame)
+    frame_quality = _camera_image_quality(frame)
+    face_quality = _camera_image_quality(face_crop)
+    feedback = _camera_face_feedback(metadata, frame.shape, face_quality if metadata.get("faceDetected") else frame_quality)
+    frame_h, frame_w = frame.shape[:2]
+
+    return {
+        "ok": True,
+        "source": "opencv-haar-deepshield-style",
+        "faceDetectorAvailable": CAMERA_FACE_DETECTOR is not None,
+        "faceDetected": bool(metadata.get("faceDetected")),
+        "bbox": metadata.get("bbox"),
+        "faceBbox": metadata.get("faceBbox"),
+        "cropSize": metadata.get("cropSize"),
+        "frameSize": {"width": int(frame_w), "height": int(frame_h)},
+        "quality": {"frame": frame_quality, "face": face_quality},
+        **feedback,
+    }
+
+
 @app.get("/game/profile")
 def game_profile(request: Request):
     user = user_from_request(request)
@@ -1245,48 +1711,101 @@ def game_profile(request: Request):
             "stats": {"games": 0, "best_score": 0, "drawings": 0, "accuracy": 0},
             "strengths": [],
             "weaknesses": [],
+            "practice_plan": [],
+            "training": _training_readiness(None),
         }
+
     with get_db() as conn:
         row = conn.execute(
             """
             SELECT COUNT(*) AS games, COALESCE(MAX(score), 0) AS best_score,
-                   COALESCE(AVG(accuracy), 0) AS avg_accuracy
+                   COALESCE(AVG(score), 0) AS avg_score,
+                   COALESCE(MAX(streak), 0) AS best_streak,
+                   COALESCE(AVG(accuracy), 0) AS avg_accuracy,
+                   COALESCE(SUM(duration_seconds), 0) AS total_seconds,
+                   MAX(created_at) AS last_played
             FROM game_sessions WHERE user_id = ?
             """,
             (user["id"],),
         ).fetchone()
         sample_row = conn.execute(
             """
-            SELECT COUNT(*) AS drawings, COALESCE(AVG(correct), 0) AS acc
+            SELECT COUNT(*) AS drawings, COALESCE(AVG(correct), 0) AS acc,
+                   COALESCE(AVG(confidence), 0) AS avg_confidence,
+                   COALESCE(SUM(point_count), 0) AS total_points
             FROM stroke_samples WHERE user_id = ?
             """,
             (user["id"],),
         ).fetchone()
         label_rows = conn.execute(
             """
-            SELECT target, COUNT(*) AS attempts, ROUND(AVG(correct) * 100, 1) AS accuracy
+            SELECT target, COUNT(*) AS attempts,
+                   ROUND(AVG(correct) * 100, 1) AS accuracy,
+                   ROUND(AVG(confidence) * 100, 1) AS avg_confidence,
+                   COALESCE(SUM(correct), 0) AS correct_samples,
+                   COALESCE(SUM(point_count), 0) AS point_count,
+                   MAX(created_at) AS last_seen
             FROM stroke_samples
             WHERE user_id = ?
             GROUP BY target
             HAVING attempts >= 1
-            ORDER BY accuracy DESC, attempts DESC
             """,
             (user["id"],),
         ).fetchall()
-    strengths = [dict(r) for r in label_rows[:5]]
-    weaknesses = [dict(r) for r in sorted(label_rows, key=lambda r: (r["accuracy"], -r["attempts"]))[:5]]
+        recent_sessions = conn.execute(
+            """
+            SELECT score, level, streak, accuracy, duration_seconds, mode, created_at
+            FROM game_sessions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+            (user["id"],),
+        ).fetchall()
+
+    labels = [dict(r) for r in label_rows]
+    for item in labels:
+        item["accuracy"] = float(item.get("accuracy") or 0)
+        item["avg_confidence"] = float(item.get("avg_confidence") or 0)
+        item["attempts"] = int(item.get("attempts") or 0)
+        item["band"] = _quality_band(item["accuracy"], item["attempts"])
+        item["tip"] = _practice_tip(item["target"])
+
+    strengths = sorted(labels, key=lambda r: (-r["accuracy"], -r["avg_confidence"], -r["attempts"], r["target"]))[:5]
+    weaknesses = sorted(labels, key=lambda r: (r["accuracy"], -r["attempts"], r["target"]))[:5]
+    practice_plan = [
+        {
+            "target": item["target"],
+            "accuracy": item["accuracy"],
+            "attempts": item["attempts"],
+            "goal": "Lưu thêm 3 mẫu rõ nét và cố đạt AI đúng 2 lần liên tiếp.",
+            "tip": item["tip"],
+        }
+        for item in weaknesses[:3]
+    ]
+
+    training = _training_readiness(user["id"])
     return {
         "authenticated": True,
         "user": user,
         "stats": {
             "games": int(row["games"]),
             "best_score": int(row["best_score"]),
+            "avg_score": round(float(row["avg_score"]), 1),
+            "best_streak": int(row["best_streak"]),
             "avg_accuracy": round(float(row["avg_accuracy"]), 1),
             "drawings": int(sample_row["drawings"]),
             "accuracy": round(float(sample_row["acc"]) * 100, 1),
+            "avg_confidence": round(float(sample_row["avg_confidence"]) * 100, 1),
+            "total_points": int(sample_row["total_points"]),
+            "total_minutes": round(float(row["total_seconds"] or 0) / 60, 1),
+            "last_played": row["last_played"],
         },
         "strengths": strengths,
         "weaknesses": weaknesses,
+        "practice_plan": practice_plan,
+        "recent_sessions": [dict(r) for r in recent_sessions],
+        "training": training,
     }
 
 
@@ -1295,12 +1814,21 @@ def game_leaderboard():
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT COALESCE(users.username, 'guest') AS username, MAX(game_sessions.score) AS score,
-                   MAX(game_sessions.level) AS level,
-                   MAX(game_sessions.streak) AS streak
-            FROM game_sessions
-            LEFT JOIN users ON users.id = game_sessions.user_id
-            GROUP BY game_sessions.user_id
+            WITH ranked AS (
+                SELECT COALESCE(users.username, 'guest') AS username,
+                       game_sessions.score, game_sessions.level, game_sessions.streak,
+                       game_sessions.accuracy, game_sessions.duration_seconds,
+                       game_sessions.mode, game_sessions.created_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY game_sessions.user_id
+                           ORDER BY game_sessions.score DESC, game_sessions.streak DESC, game_sessions.level DESC, game_sessions.id DESC
+                       ) AS rn
+                FROM game_sessions
+                LEFT JOIN users ON users.id = game_sessions.user_id
+            )
+            SELECT username, score, level, streak, accuracy, duration_seconds, mode, created_at
+            FROM ranked
+            WHERE rn = 1
             ORDER BY score DESC, streak DESC, level DESC
             LIMIT 10
             """
@@ -1339,23 +1867,50 @@ async def save_stroke_sample(
     correct: int = Form(0),
     mode: str = Form("mouse"),
     strokes_json: str = Form("[]"),
+    judge_json: str = Form("{}"),
+    manual: int = Form(0),
+    point_count: int = Form(0),
 ):
+    """Lưu một mẫu vẽ để cập nhật Skill Profile và dùng cho self-improving loop."""
     user = user_from_request(request)
-    try:
-        parsed = json.loads(strokes_json)
-        compact_json = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        compact_json = "[]"
+    parsed = _safe_json_loads(strokes_json, [])
+    compact_json = json.dumps(parsed if isinstance(parsed, list) else [], ensure_ascii=False, separators=(",", ":"))
+    parsed_judge = _safe_json_loads(judge_json, {})
+    compact_judge = json.dumps(parsed_judge if isinstance(parsed_judge, dict) else {}, ensure_ascii=False, separators=(",", ":"))
+    points = int(point_count) if int(point_count or 0) > 0 else _count_stroke_points(parsed)
+    target_label = target.strip().lower()
+    predicted_label = predicted.strip().lower()
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO stroke_samples(user_id, target, predicted, confidence, correct, mode, strokes_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO stroke_samples(
+                user_id, target, predicted, confidence, correct, mode, strokes_json,
+                judge_json, manual, point_count, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user["id"] if user else None, target.strip().lower(), predicted.strip().lower(), float(confidence), int(correct), mode, compact_json, _now_iso()),
+            (
+                user["id"] if user else None,
+                target_label,
+                predicted_label,
+                float(confidence),
+                1 if int(correct or 0) else 0,
+                mode.strip().lower()[:32],
+                compact_json,
+                compact_judge,
+                1 if int(manual or 0) else 0,
+                max(0, points),
+                _now_iso(),
+            ),
         )
-    return {"ok": True, "sample_id": int(cur.lastrowid) if cur else None}
-
+    return {
+        "ok": True,
+        "sample_id": int(cur.lastrowid) if cur else None,
+        "target": target_label,
+        "predicted": predicted_label,
+        "correct": bool(int(correct or 0)),
+        "point_count": max(0, points),
+    }
 
 
 @app.post("/predict_stroke")
@@ -1395,100 +1950,250 @@ async def predict_stroke(request: Request, strokes_json: str = Form(...), target
 
 @app.get("/dataset/export")
 def dataset_export(request: Request):
-    """Export dữ liệu stroke đã thu thập sang JSONL để dùng train/retrain trên Colab."""
+    """Export dữ liệu stroke sang JSONL/CSV/manifest để train local hoặc Colab."""
     user = user_from_request(request)
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT stroke_samples.id, users.username, target, predicted, confidence, correct, mode, strokes_json, stroke_samples.created_at
+            SELECT stroke_samples.id, users.username, target, predicted, confidence, correct, mode,
+                   strokes_json, judge_json, manual, point_count, stroke_samples.created_at
             FROM stroke_samples
             LEFT JOIN users ON users.id = stroke_samples.user_id
             ORDER BY stroke_samples.id ASC
             """
         ).fetchall()
     EXPORTED_DATASET_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = EXPORTED_DATASET_DIR / "stroke_samples.jsonl"
-    with out_path.open("w", encoding="utf-8") as f:
+    jsonl_path = EXPORTED_DATASET_DIR / "stroke_samples.jsonl"
+    csv_path = EXPORTED_DATASET_DIR / "stroke_samples.csv"
+    manifest_path = EXPORTED_DATASET_DIR / "training_manifest.json"
+
+    label_summary: Dict[str, dict] = {}
+    exported_rows = []
+    with jsonl_path.open("w", encoding="utf-8") as f:
         for r in rows:
             payload = dict(r)
-            try:
-                payload["strokes"] = json.loads(payload.pop("strokes_json") or "[]")
-            except Exception:
-                payload["strokes"] = []
+            payload["strokes"] = _safe_json_loads(payload.pop("strokes_json", "[]"), [])
+            payload["judge"] = _safe_json_loads(payload.pop("judge_json", "{}"), {})
+            payload["point_count"] = int(payload.get("point_count") or _count_stroke_points(payload["strokes"]))
+            exported_rows.append(payload)
+            item = label_summary.setdefault(payload["target"], {"target": payload["target"], "samples": 0, "correct": 0})
+            item["samples"] += 1
+            item["correct"] += int(payload.get("correct") or 0)
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        fieldnames = ["id", "username", "target", "predicted", "confidence", "correct", "mode", "manual", "point_count", "created_at"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in exported_rows:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+    for item in label_summary.values():
+        item["accuracy"] = round((item["correct"] / item["samples"]) * 100, 1) if item["samples"] else 0
+    readiness = _training_readiness(None)
+    manifest = {
+        "exported_at": _now_iso(),
+        "requested_by": user["username"] if user else "guest",
+        "samples": len(exported_rows),
+        "classes": len(label_summary),
+        "files": {
+            "jsonl": "stroke_samples.jsonl",
+            "csv": "stroke_samples.csv",
+        },
+        "label_summary": sorted(label_summary.values(), key=lambda x: (-x["samples"], x["target"])),
+        "training_readiness": readiness,
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
     return {
         "ok": True,
         "requested_by": user["username"] if user else "guest",
-        "samples": len(rows),
-        "path": str(out_path),
-        "download": "/dataset/download/stroke_samples.jsonl",
+        "samples": len(exported_rows),
+        "classes": len(label_summary),
+        "path": str(EXPORTED_DATASET_DIR),
+        "downloads": {
+            "jsonl": "/dataset/download/stroke_samples.jsonl",
+            "csv": "/dataset/download/stroke_samples.csv",
+            "manifest": "/dataset/download/training_manifest.json",
+        },
+        "label_summary": manifest["label_summary"],
+        "training_readiness": readiness,
     }
 
 
 @app.get("/dataset/download/{filename}")
 def dataset_download(filename: str):
-    allowed = {"stroke_samples.jsonl"}
+    allowed = {"stroke_samples.jsonl", "stroke_samples.csv", "training_manifest.json"}
     if filename not in allowed:
         raise HTTPException(status_code=404, detail="File không hợp lệ.")
     path = EXPORTED_DATASET_DIR / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="Chưa export dataset.")
-    return FileResponse(path, media_type="application/jsonl", filename=filename)
+    media_type = "application/jsonl" if filename.endswith(".jsonl") else "text/csv" if filename.endswith(".csv") else "application/json"
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 @app.post("/admin/retrain/start")
 def retrain_start(request: Request, mode: str = Form("stroke"), epochs: int = Form(8)):
-    """Khởi động retrain tự động local. Colab vẫn là hướng khuyến nghị nếu train nặng."""
-    global retrain_process
+    """Khởi động retrain tự động local; status/log đọc tại /admin/retrain/status."""
+    global retrain_process, retrain_job_id
     user = user_from_request(request)
     if not user:
         raise HTTPException(status_code=401, detail="Cần đăng nhập để chạy retrain.")
     mode = mode.strip().lower()
     if mode not in {"stroke", "image"}:
         raise HTTPException(status_code=400, detail="mode phải là stroke hoặc image.")
+
+    readiness = _training_readiness(None)
+    if mode == "stroke" and not readiness["ready_stroke"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Chưa đủ dữ liệu để train stroke model.",
+                "readiness": readiness,
+            },
+        )
+    if mode == "image" and not readiness["ready_image"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Chưa đủ dữ liệu để train image model. Hãy export/lưu thêm mẫu hoặc thêm QuickDraw .npy.",
+                "readiness": readiness,
+            },
+        )
+
     with retrain_lock:
         if retrain_process and retrain_process.poll() is None:
             return {"ok": False, "message": "Đang có job retrain chạy.", "status": _read_retrain_status()}
         script = "train_stroke_model.py" if mode == "stroke" else "self_improve_retrain.py"
         log_path = ROOT / "data" / f"retrain_{mode}.log"
-        _write_retrain_status("running", f"Đang chạy {script}", {"mode": mode, "log": str(log_path), "started_by": user["username"]})
-        cmd = [sys.executable, str(ROOT / script), "--epochs", str(max(1, min(int(epochs), 50)))]
+        safe_epochs = max(1, min(int(epochs), 50))
+        _write_retrain_status("running", f"Đang chạy {script}", {"mode": mode, "log": str(log_path), "started_by": user["username"], "readiness": readiness})
+        cmd = [sys.executable, "-X", "utf8", str(ROOT / "src" / "training" / script), "--epochs", str(safe_epochs)]
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         log_file = open(log_path, "w", encoding="utf-8")
-        retrain_process = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log_file, stderr=subprocess.STDOUT)
-    return {"ok": True, "message": "Đã bắt đầu retrain.", "pid": retrain_process.pid, "status": _read_retrain_status()}
+        retrain_process = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log_file, stderr=subprocess.STDOUT, env=env)
+        with get_db() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO training_jobs(user_id, mode, status, message, pid, epochs, samples, classes, log_path, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user["id"], mode, "running", f"Đang chạy {script}", retrain_process.pid, safe_epochs, readiness["total_samples"], readiness["classes"], str(log_path), _now_iso()),
+            )
+            retrain_job_id = int(cur.lastrowid)
+    return {"ok": True, "message": "Đã bắt đầu retrain.", "pid": retrain_process.pid, "job_id": retrain_job_id, "status": _read_retrain_status()}
 
 
 @app.get("/admin/retrain/status")
 def retrain_status():
+    global retrain_job_id
     status = _read_retrain_status()
+    process_running = False
+    returncode = None
     if retrain_process:
-        status["process_running"] = retrain_process.poll() is None
-        status["returncode"] = retrain_process.poll()
+        returncode = retrain_process.poll()
+        process_running = returncode is None
+        status["process_running"] = process_running
+        status["returncode"] = returncode
+        if not process_running and retrain_job_id:
+            final_status = str(status.get("status") or ("done" if returncode == 0 else "failed"))
+            message = str(status.get("message") or "")
+            if final_status == "running":
+                final_status = "done" if returncode == 0 else "failed"
+                message = "Job kết thúc." if returncode == 0 else "Job dừng với lỗi. Xem log_tail."
+                _write_retrain_status(final_status, message, {"mode": status.get("mode"), "returncode": returncode})
+                status = _read_retrain_status()
+                status["process_running"] = False
+                status["returncode"] = returncode
+            _update_training_job(retrain_job_id, final_status, message)
     else:
         status["process_running"] = False
+
+    log_path = status.get("log") or (ROOT / "data" / f"retrain_{status.get('mode', 'stroke')}.log")
+    status["log_tail"] = _tail_file(log_path)
+    status["training_readiness"] = _training_readiness(None)
+    status["recent_jobs"] = _recent_training_jobs()
+    status["model_runtime"] = _runtime_model_info()
+    status["self_improved_model_exists"] = SELF_IMPROVED_MODEL_PATH.exists()
     return status
+
+
+@app.post("/admin/model/reload")
+def admin_model_reload(request: Request, kind: str = Form("self_improved")):
+    """Nạp model ảnh mới vào runtime sau khi Train image hoàn tất."""
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để reload model.")
+    kind = kind.strip().lower()
+    if kind in {"self_improved", "image", "latest"}:
+        info = _reload_image_runtime(SELF_IMPROVED_MODEL_PATH, SELF_IMPROVED_CATEGORIES_PATH)
+    elif kind in {"base", "default"}:
+        info = _reload_image_runtime(MODEL_PATH, CATEGORIES_PATH)
+    else:
+        raise HTTPException(status_code=400, detail="kind phải là self_improved hoặc base.")
+    return {"ok": True, "reloaded_by": user["username"], "model": info}
 
 
 @app.websocket("/ws/pvp/{room}")
 async def websocket_pvp(websocket: WebSocket, room: str):
     username = websocket.query_params.get("username", "guest")[:32] or "guest"
-    await pvp_manager.connect(room, websocket, username)
+    room_name = pvp_manager.normalize_room(room)
+    await pvp_manager.connect(room_name, websocket, username)
     try:
         while True:
             payload = await websocket.receive_json()
             msg_type = payload.get("type", "event")
-            meta = pvp_manager.meta.get(websocket, {})
-            if msg_type == "score":
+            meta = pvp_manager.update_player(websocket, payload)
+            payload.update({"username": username, "players": pvp_manager.players(room_name)})
+            if msg_type in {"score", "final"}:
                 try:
-                    meta["score"] = int(payload.get("score", 0))
+                    with get_db() as conn:
+                        conn.execute(
+                            """
+                            INSERT INTO pvp_matches(room, username, score, target, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (room_name, username, int(meta.get("score") or 0), str(meta.get("target") or ""), _now_iso()),
+                        )
                 except Exception:
                     pass
-            payload.update({"username": username, "players": pvp_manager.players(room)})
-            await pvp_manager.broadcast(room, payload)
+            await pvp_manager.broadcast(room_name, payload)
     except WebSocketDisconnect:
         meta = pvp_manager.disconnect(websocket)
         if meta:
             await pvp_manager.broadcast(meta["room"], {"type": "system", "message": f"{meta['username']} left.", "players": pvp_manager.players(meta["room"])})
+
+
+@app.post("/camera/face-strokes")
+async def camera_face_strokes(
+    file: UploadFile = File(...),
+    canvas_width: int = Form(CANVAS_W),
+    canvas_height: int = Form(CANVAS_H),
+    mirror: int = Form(1),
+    preview: int = Form(0),
+):
+    """Nhận diện khuôn mặt từ frame webcam và chuyển thành strokes cho camera mode.
+
+    Luồng này lấy ý tưởng từ DeepShieldAI-Pro: detect largest face bằng OpenCV Haar,
+    crop vùng mặt có padding, sau đó biến vùng mặt thành nét sketch nhẹ. Frame webcam
+    chỉ xử lý trong RAM và không lưu ra đĩa.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Bạn chưa gửi frame camera.")
+    try:
+        return analyze_face_frame_bytes(
+            image_bytes,
+            canvas_width=int(canvas_width),
+            canvas_height=int(canvas_height),
+            mirror=bool(int(mirror)),
+            include_preview=bool(int(preview)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Không xử lý được khuôn mặt từ camera: {exc}") from exc
 
 
 @app.post("/image/enhance")

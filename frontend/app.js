@@ -29,8 +29,19 @@ const state = {
   realtimeId: null,
   predictInFlight: false,
   cameraStream: null,
+  cameraTool: "hand",
   hands: null,
   handLoop: false,
+  faceMesh: null,
+  faceLoop: false,
+  faceFilteredPoint: null,
+  faceCenter: null,
+  faceDrawingActive: false,
+  faceStatus: null,
+  faceAnalyzeInFlight: false,
+  faceLastClear: 0,
+  latestFaceMeshSketch: null,
+  latestFaceMeshAt: 0,
   filteredPoint: null,
   currentStroke: null,
   strokes: [],
@@ -44,12 +55,18 @@ const state = {
   pvpEvents: [],
   retrainStatus: null,
   strokeModelAvailable: false,
+  lastSavedKey: "",
+  imageModelReloaded: false,
 };
 
 const CANVAS_W = 960;
 const CANVAS_H = 540;
 const SUCCESS_THRESHOLD_BASE = 0.68;
 const REALTIME_INTERVAL_MS = 620;
+const FACE_GAIN = 3.8;
+const FACE_DRAW_MOUTH_THRESHOLD = 0.038;
+const FACE_CLEAR_BLINK_THRESHOLD = 0.09;
+const FACE_CENTER_DRIFT_ALPHA = 0.015;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -79,7 +96,9 @@ async function apiPostForm(url, form) {
 async function extractError(res) {
   try {
     const data = await res.json();
-    return data.detail || data.error || `HTTP ${res.status}`;
+    const detail = data.detail || data.error;
+    if (!detail) return `HTTP ${res.status}`;
+    return typeof detail === "string" ? detail : JSON.stringify(detail);
   } catch {
     return `HTTP ${res.status}`;
   }
@@ -235,6 +254,12 @@ function renderGameShell() {
               <button id="mouseModeBtn" class="secondary active">Vẽ chuột</button>
               <button id="cameraModeBtn" class="secondary">Vẽ tay camera</button>
             </div>
+            <div class="camera-tool-switch" id="cameraToolSwitch">
+              <span>Bút camera</span>
+              <button id="handToolBtn" class="secondary active" type="button">Bút tay</button>
+              <button id="faceToolBtn" class="secondary" type="button">Bút mặt/mũi</button>
+              <button id="faceSnapBtn" class="secondary" type="button" disabled>Quét nét mặt</button>
+            </div>
           </div>
 
           <div id="gameStage" class="game-stage mouse-mode">
@@ -242,9 +267,12 @@ function renderGameShell() {
             <canvas id="guideCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
             <canvas id="drawCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
             <canvas id="handCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
+            <canvas id="faceCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
             <div class="stage-overlay">
               <div class="target-chip">Mục tiêu: <strong id="targetChip">---</strong></div>
               <div class="ai-chip">AI thấy: <strong id="aiChip">---</strong></div>
+              <div class="tool-chip">Bút: <strong id="toolChip">tay/ngón trỏ</strong></div>
+              <div class="face-chip">Mặt: <strong id="faceChip">tắt</strong></div>
             </div>
             <div id="correctFlash" class="correct-flash">Correct +Score</div>
           </div>
@@ -334,17 +362,79 @@ function wireGameEvents() {
   $("#logoutBtn").addEventListener("click", logout);
   $("#mouseModeBtn").addEventListener("click", () => setMode("mouse"));
   $("#cameraModeBtn").addEventListener("click", () => setMode("camera"));
+  $("#handToolBtn")?.addEventListener("click", () => setCameraTool("hand"));
+  $("#faceToolBtn")?.addEventListener("click", () => setCameraTool("face"));
+  $("#faceSnapBtn")?.addEventListener("click", () => scanFaceSketch(false));
   $("#startBtn").addEventListener("click", () =>
     state.running ? endGame("Bạn đã kết thúc lượt chơi.") : startGame(),
   );
   $("#clearBtn").addEventListener("click", clearDrawing);
   $("#skipBtn").addEventListener("click", skipRound);
-  $("#saveBtn").addEventListener("click", () => saveStrokeSample(false));
+  $("#saveBtn").addEventListener("click", () => saveStrokeSample(Boolean(state.prediction?.is_correct), true));
   $("#speakBtn").addEventListener("click", speakCurrentWord);
   $("#pvpBtn").addEventListener("click", togglePvp);
   $("#exportDatasetBtn").addEventListener("click", exportDataset);
   $("#trainStrokeBtn").addEventListener("click", () => startRetrain("stroke"));
   $("#trainImageBtn").addEventListener("click", () => startRetrain("image"));
+  updateCameraToolUI();
+}
+
+
+function currentInputMode() {
+  return state.mode === "camera" ? `camera-${state.cameraTool}` : state.mode;
+}
+
+function cameraInstruction() {
+  return state.cameraTool === "face"
+    ? "Bút mặt/mũi: há miệng nhẹ để vẽ bằng mũi, ngậm miệng để nhấc bút, chớp cả hai mắt để xóa. Nút Quét nét mặt sẽ chuyển khuôn mặt hiện tại thành stroke."
+    : "Bút tay: giơ ngón trỏ để vẽ, xòe bàn tay để xóa nét.";
+}
+
+function cameraFaceLabel() {
+  if (state.cameraTool !== "face") return "chờ";
+  if (state.faceAnalyzeInFlight) return "đang quét mặt";
+  if (state.faceDrawingActive) return "đang vẽ bằng mũi";
+  if (state.faceStatus?.faceDetected) return state.faceStatus.ready ? state.faceStatus.status || "mặt sẵn sàng" : state.faceStatus.status || "chỉnh mặt";
+  return "chưa thấy mặt";
+}
+
+function updateCameraToolUI() {
+  const handBtn = $("#handToolBtn");
+  const faceBtn = $("#faceToolBtn");
+  const snapBtn = $("#faceSnapBtn");
+  const stage = $("#gameStage");
+  handBtn?.classList.toggle("active", state.cameraTool === "hand");
+  faceBtn?.classList.toggle("active", state.cameraTool === "face");
+  stage?.classList.toggle("face-tracking", state.cameraTool === "face");
+  stage?.classList.toggle("hand-tracking", state.cameraTool === "hand");
+  if (snapBtn) {
+    snapBtn.disabled = state.mode !== "camera" || state.faceAnalyzeInFlight;
+    snapBtn.textContent = state.faceAnalyzeInFlight ? "Đang quét..." : "Quét nét mặt";
+  }
+  const toolChip = $("#toolChip");
+  if (toolChip) toolChip.textContent = state.cameraTool === "face" ? "mặt/mũi" : "tay/ngón trỏ";
+  const faceChip = $("#faceChip");
+  if (faceChip) faceChip.textContent = state.mode === "camera" ? cameraFaceLabel() : "tắt";
+}
+
+async function setCameraTool(tool) {
+  state.cameraTool = tool === "face" ? "face" : "hand";
+  state.handLoop = false;
+  state.faceLoop = false;
+  state.filteredPoint = null;
+  state.faceFilteredPoint = null;
+  state.faceCenter = null;
+  state.faceDrawingActive = false;
+  state.penLiftFrames = 0;
+  $("#handCanvas")?.getContext("2d")?.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  $("#faceCanvas")?.getContext("2d")?.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  updateCameraToolUI();
+  if (state.mode === "camera") {
+    const ok = await startCamera();
+    if (ok) setStatus(cameraInstruction(), "ok");
+  } else {
+    setStatus(state.cameraTool === "face" ? "Đã chọn bút mặt/mũi. Chuyển sang chế độ camera để dùng." : "Đã chọn bút tay/ngón trỏ.");
+  }
 }
 
 function setupCanvas() {
@@ -380,6 +470,7 @@ function pointerToCanvas(event) {
 function beginStroke(point) {
   state.currentStroke = [point];
   state.lastPoint = point;
+  state.lastMid = point; // điểm giữa khởi đầu để vẽ đường cong LIỀN MẠCH
   state.hasDrawn = true;
 }
 
@@ -404,23 +495,289 @@ function endStroke() {
 
 function drawSegment(a, b) {
   const ctx = $("#drawCanvas").getContext("2d");
+  // Kỹ thuật "quadratic qua điểm giữa": mỗi đoạn bắt đầu ĐÚNG nơi đoạn trước kết
+  // thúc (state.lastMid) nên nét luôn liền mạch, không hở như trước.
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const start = state.lastMid || a;
   ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  const mx = (a.x + b.x) / 2;
-  const my = (a.y + b.y) / 2;
-  ctx.quadraticCurveTo(a.x, a.y, mx, my);
+  ctx.moveTo(start.x, start.y);
+  ctx.quadraticCurveTo(a.x, a.y, mid.x, mid.y);
   ctx.stroke();
+  state.lastMid = mid;
 }
+
+
+function clearFaceOverlay() {
+  const face = $("#faceCanvas");
+  if (face) face.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
+}
+
+function captureVideoFrameBlob(video, targetWidth = 640) {
+  return new Promise((resolve, reject) => {
+    if (!video || video.readyState < 2) {
+      reject(new Error("Camera chưa có khung hình dùng được."));
+      return;
+    }
+    const srcW = video.videoWidth || CANVAS_W;
+    const srcH = video.videoHeight || CANVAS_H;
+    const scale = targetWidth / Math.max(1, srcW);
+    const temp = document.createElement("canvas");
+    temp.width = targetWidth;
+    temp.height = Math.max(1, Math.round(srcH * scale));
+    const ctx = temp.getContext("2d");
+    ctx.drawImage(video, 0, 0, temp.width, temp.height);
+    temp.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Không chụp được khung hình camera."));
+    }, "image/jpeg", 0.78);
+  });
+}
+
+function normalizeStrokePoint(point, index, source) {
+  const x = Math.max(0, Math.min(CANVAS_W, Number(point?.x ?? 0)));
+  const y = Math.max(0, Math.min(CANVAS_H, Number(point?.y ?? 0)));
+  return {
+    x,
+    y,
+    t: Number(point?.t ?? performance.now() + index * 8),
+    source: point?.source || source,
+  };
+}
+
+function drawDetectedFaceOverlay(data) {
+  const canvas = $("#faceCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  if (!data?.face_detected) return;
+  ctx.save();
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(85, 230, 165, 0.78)";
+  for (const stroke of data.strokes || []) {
+    if (!Array.isArray(stroke) || stroke.length < 2) continue;
+    ctx.beginPath();
+    stroke.forEach((point, idx) => {
+      const p = normalizeStrokePoint(point, idx, "camera-face-sketch");
+      if (idx === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  }
+  const box = data.face_bbox || data.bbox;
+  if (box) {
+    ctx.strokeStyle = "rgba(87, 167, 255, 0.92)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(Number(box.x || 0), Number(box.y || 0), Number(box.width || 0), Number(box.height || 0));
+  }
+  ctx.restore();
+}
+
+
+function chainToStroke(landmarks, indices, source, tOffset = 0) {
+  const stroke = [];
+  indices.forEach((idx, pointIndex) => {
+    const p = landmarks[idx];
+    if (!p) return;
+    stroke.push({
+      x: Math.max(0, Math.min(CANVAS_W, (1 - p.x) * CANVAS_W)),
+      y: Math.max(0, Math.min(CANVAS_H, p.y * CANVAS_H)),
+      t: performance.now() + tOffset + pointIndex * 7,
+      source,
+    });
+  });
+  return stroke;
+}
+
+function makeFaceMeshSketchData(results) {
+  const landmarks = results?.multiFaceLandmarks?.[0];
+  if (!landmarks) {
+    return {
+      ok: true,
+      face_detected: false,
+      detector: "browser-facemesh",
+      message: "Chưa thấy khuôn mặt rõ trong camera.",
+      strokes: [],
+      stroke_count: 0,
+      point_count: 0,
+      quality: 0,
+    };
+  }
+
+  const chains = [
+    { source: "face-mesh-oval", idx: [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10] },
+    { source: "face-mesh-left-brow", idx: [70, 63, 105, 66, 107] },
+    { source: "face-mesh-right-brow", idx: [336, 296, 334, 293, 300] },
+    { source: "face-mesh-left-eye", idx: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33] },
+    { source: "face-mesh-right-eye", idx: [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466, 263] },
+    { source: "face-mesh-nose", idx: [168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 98, 327, 2] },
+    { source: "face-mesh-mouth", idx: [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61] },
+    { source: "face-mesh-lip-inner", idx: [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191, 78] },
+  ];
+  const strokes = chains
+    .map((chain, i) => chainToStroke(landmarks, chain.idx, chain.source, i * 180))
+    .filter((stroke) => stroke.length >= 2);
+  const xs = landmarks.map((p) => (1 - p.x) * CANVAS_W);
+  const ys = landmarks.map((p) => p.y * CANVAS_H);
+  const minX = Math.max(0, Math.min(...xs));
+  const maxX = Math.min(CANVAS_W, Math.max(...xs));
+  const minY = Math.max(0, Math.min(...ys));
+  const maxY = Math.min(CANVAS_H, Math.max(...ys));
+  const pointCount = strokes.reduce((sum, stroke) => sum + stroke.length, 0);
+  return {
+    ok: true,
+    face_detected: true,
+    detector: "browser-facemesh-landmarks",
+    message: "Đã nhận diện outline, mắt, mũi, miệng bằng FaceMesh.",
+    face_bbox: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+    strokes,
+    semantic_strokes: strokes,
+    edge_strokes: [],
+    stroke_count: strokes.length,
+    point_count: pointCount,
+    quality: Math.max(40, Math.min(100, Math.round(pointCount * 0.55))),
+  };
+}
+
+function freshFaceMeshSketch(maxAgeMs = 1800) {
+  if (!state.latestFaceMeshSketch?.face_detected) return null;
+  if (performance.now() - state.latestFaceMeshAt > maxAgeMs) return null;
+  if (!(state.latestFaceMeshSketch.strokes || []).length) return null;
+  return state.latestFaceMeshSketch;
+}
+
+function handleFaceMeshUnifiedResults(results) {
+  const sketch = makeFaceMeshSketchData(results);
+  state.latestFaceMeshSketch = sketch;
+  state.latestFaceMeshAt = performance.now();
+  if (state.cameraTool === "face") {
+    onFaceResults(results);
+  }
+}
+
+function hasFaceStrokesInDrawing() {
+  return getAllCurrentStrokes().some((stroke) =>
+    Array.isArray(stroke) && stroke.some((point) => {
+      const source = String(point?.source || "");
+      return source.startsWith("face-") || source.includes("camera-face");
+    }),
+  );
+}
+
+function drawStrokeListToCanvas(strokes, source = "camera-face-sketch") {
+  const canvas = $("#drawCanvas");
+  if (!canvas) return 0;
+  const ctx = canvas.getContext("2d");
+  let added = 0;
+  ctx.save();
+  ctx.lineWidth = 11;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#050505";
+  for (const stroke of strokes || []) {
+    if (!Array.isArray(stroke) || stroke.length < 2) continue;
+    const clean = stroke
+      .map((point, index) => normalizeStrokePoint(point, index, source))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (clean.length < 2) continue;
+    ctx.beginPath();
+    clean.forEach((point, index) => {
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+    ctx.stroke();
+    state.strokes.push(clean);
+    added += 1;
+  }
+  ctx.restore();
+  if (added > 0) state.hasDrawn = true;
+  return added;
+}
+
+async function scanFaceSketch(auto = false) {
+  if (state.faceAnalyzeInFlight) return;
+  if (state.mode !== "camera") {
+    await setMode("camera");
+    if (state.mode !== "camera") return;
+  }
+  if (state.cameraTool !== "face") {
+    await setCameraTool("face");
+  }
+  const video = $("#cameraVideo");
+  if (!video || !state.cameraStream) {
+    const ok = await startCamera();
+    if (!ok) return;
+  }
+  state.faceAnalyzeInFlight = true;
+  state.faceStatus = { faceDetected: true, ready: false, status: "đang quét" };
+  updateCameraToolUI();
+  if (!auto) setStatus("Đang quét khuôn mặt trong khung camera để tạo nét vẽ...");
+  try {
+    let data = freshFaceMeshSketch();
+    if (!data && state.faceMesh) {
+      // Chờ FaceMesh cập nhật thêm 1-2 frame trước khi dùng fallback backend.
+      await waitNextFrame();
+      data = freshFaceMeshSketch(2400);
+    }
+    if (!data) {
+      const blob = await captureVideoFrameBlob($("#cameraVideo"), 640);
+      const form = new FormData();
+      form.append("file", blob, "camera-face-frame.jpg");
+      form.append("canvas_width", String(CANVAS_W));
+      form.append("canvas_height", String(CANVAS_H));
+      form.append("mirror", "1");
+      form.append("preview", "0");
+      data = await apiPostForm("/camera/face-strokes", form);
+    }
+    drawDetectedFaceOverlay(data);
+    if (!data?.face_detected || !(data.strokes || []).length) {
+      const message = data?.message || "Chưa nhận diện được nét mặt. Hãy nhìn thẳng camera và tăng ánh sáng.";
+      state.faceStatus = { faceDetected: false, ready: false, status: message };
+      updateCameraToolUI();
+      if (!auto) setStatus(message, "error");
+      return;
+    }
+    const source = String(data.detector || "").includes("facemesh") ? "face-mesh-sketch" : "camera-face-sketch";
+    const added = drawStrokeListToCanvas(data.strokes, source);
+    state.faceStatus = {
+      faceDetected: true,
+      ready: true,
+      status: `${added} nét mặt`,
+    };
+    updateCameraToolUI();
+    if (added > 0) {
+      setStatus(`Đã thêm ${added} nét khuôn mặt vào canvas vẽ (${escapeHtml(data.detector || "camera")}).`, "ok");
+      if (state.running && state.currentTarget && !state.predictInFlight) {
+        setTimeout(() => realtimePredict(), 0);
+      }
+    } else if (!auto) {
+      setStatus("Đã thấy mặt nhưng nét sinh ra quá nhỏ/ít. Hãy đưa mặt gần camera hơn.", "error");
+    }
+  } catch (err) {
+    clearFaceOverlay();
+    state.faceStatus = { faceDetected: false, ready: false, status: err.message };
+    updateCameraToolUI();
+    if (!auto) setStatus(err.message, "error");
+  } finally {
+    state.faceAnalyzeInFlight = false;
+    updateCameraToolUI();
+  }
+}
+
 
 function clearDrawing() {
   const draw = $("#drawCanvas");
   draw.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
   const hand = $("#handCanvas");
   hand.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
+  clearFaceOverlay();
   state.hasDrawn = false;
   state.currentStroke = null;
   state.strokes = [];
   state.lastPoint = null;
+  state.lastMid = null;
+  state.penLiftFrames = 0;
   state.filteredPoint = null;
   state.predictionBuffer = [];
   state.consecutiveCorrect = 0;
@@ -439,17 +796,26 @@ async function setMode(mode) {
   stage.classList.toggle("mouse-mode", mode === "mouse");
   $("#mouseModeBtn").classList.toggle("active", mode === "mouse");
   $("#cameraModeBtn").classList.toggle("active", mode === "camera");
+  updateCameraToolUI();
   if (mode === "camera") {
-    await startCamera();
-    setStatus(
-      "Camera mode: dùng ngón trỏ để vẽ, mở cả bàn tay để xóa nhanh.",
-      "ok",
-    );
+    const ok = await startCamera();
+    if (ok) {
+      setStatus(cameraInstruction(), "ok");
+    } else {
+      state.mode = "mouse";
+      stage.classList.remove("camera-mode");
+      stage.classList.add("mouse-mode");
+      $("#mouseModeBtn").classList.add("active");
+      $("#cameraModeBtn").classList.remove("active");
+      updateCameraToolUI();
+    }
   } else {
+    clearFaceOverlay();
     stopCamera();
-    setStatus("Mouse mode: vẽ trực tiếp trên khung trắng.");
+    setStatus("Chế độ vẽ chuột: vẽ trực tiếp trên canvas trắng.");
   }
 }
+
 
 function shuffle(items) {
   const arr = [...items];
@@ -502,6 +868,7 @@ function nextRound() {
   state.roundTime = Math.max(35, 60 - Math.min(state.streak, 10) * 2);
   state.timeLeft = state.roundTime;
   state.roundStartedAt = Date.now();
+  state.lastSavedKey = "";
   drawGuide(state.currentTarget.label);
   updateTargetPanel();
   updateHud();
@@ -546,7 +913,7 @@ async function realtimePredict() {
     const form = new FormData();
     form.append("file", blob, "drawing.png");
     form.append("target", state.currentTarget.label);
-    form.append("source", state.mode === "camera" ? "camera" : "mouse");
+    form.append("source", currentInputMode());
     form.append("stroke_count", String(countStrokePoints()));
     form.append("elapsed_ms", String(Date.now() - state.roundStartedAt));
     let data = await apiPostForm("/predict_godmode", form);
@@ -566,6 +933,9 @@ async function realtimePredict() {
       };
     } else {
       data.ai_source = "image-cnn";
+    }
+    if (hasFaceStrokesInDrawing()) {
+      data.ai_source = `${data.ai_source}+face-strokes`;
     }
     state.prediction = data;
     state.judge = data.judge;
@@ -679,17 +1049,24 @@ async function endGame(message) {
   form.append("streak", String(state.bestStreak));
   form.append("accuracy", String(accuracy.toFixed(1)));
   form.append("duration_seconds", String(duration));
-  form.append("mode", state.mode);
+  form.append("mode", currentInputMode());
   try {
     await apiPostForm("/game/session", form);
   } catch (err) {
     console.warn(err);
   }
+  broadcastPvp({
+    type: "final",
+    score: state.score,
+    target: state.currentTarget?.label || "",
+    message: `Final score ${state.score}`,
+  });
   await refreshProfileAndLeaderboard();
   renderProfile();
   renderLeaderboard();
+  refreshRetrainStatus();
   setStatus(
-    `${message} Score: ${state.score}. Accuracy: ${accuracy.toFixed(1)}%.`,
+    `${message} Score: ${state.score}. Accuracy: ${accuracy.toFixed(1)}%. Skill Profile và Leaderboard đã cập nhật.`,
     "ok",
   );
 }
@@ -864,62 +1241,100 @@ function updatePredictionPanel(data) {
     box.textContent = "AI chưa có dữ liệu.";
     return;
   }
-  const source = data.ai_source
-    ? `<div class="mini-row"><span>AI source</span><small>${escapeHtml(data.ai_source)}</small></div>`
+  const conf = Number(data.confidence || 0);
+  const target = state.currentTarget?.label || data.target || "";
+  const threshold = Math.max(
+    0.58,
+    SUCCESS_THRESHOLD_BASE - Math.min(state.streak, 8) * 0.01,
+  );
+  const match = data.label === target;
+  const source = data.ai_source || data.source || "image-cnn";
+  const faceRow = state.mode === "camera" && state.cameraTool === "face"
+    ? `<div class="mini-row"><span>Face input</span><small>${escapeHtml(cameraFaceLabel())}</small></div>`
     : "";
-  box.innerHTML =
-    source +
-    data.top5
-      .map(
-        (p) => `
-    <div class="pred-row">
-      <div class="pred-label">${escapeHtml(p.label)}</div>
-      <div class="pred-bar"><span style="width:${Math.round(p.confidence * 100)}%"></span></div>
-      <div>${Math.round(p.confidence * 100)}%</div>
-    </div>
-  `,
-      )
-      .join("");
+  const sourceRows = `
+    <div class="mini-row"><span>AI source</span><small>${escapeHtml(source)}</small></div>
+    ${faceRow}
+    <div class="mini-row"><span>${match ? "Đúng mục tiêu" : "Đang lệch mục tiêu"}</span><small>${Math.round(conf * 100)}% / cần ${Math.round(threshold * 100)}%</small></div>
+    <div class="mini-row"><span>Auto pass</span><small>${state.consecutiveCorrect || 0}/2 lần đúng liên tiếp</small></div>
+  `;
+  const rows = data.top5
+    .map((p) => {
+      const pct = Math.round(Number(p.confidence || 0) * 100);
+      const isTarget = p.label === target;
+      return `
+        <div class="pred-row ${isTarget ? "target-hit" : ""}">
+          <div class="pred-label">${isTarget ? "✓ " : ""}${escapeHtml(p.label)}</div>
+          <div class="pred-bar"><span style="width:${pct}%"></span></div>
+          <div>${pct}%</div>
+        </div>
+      `;
+    })
+    .join("");
+  box.innerHTML = sourceRows + rows;
 }
 
 function updateJudge(judge) {
-  $("#gradeBadge").textContent = judge?.grade || "---";
+  const badge = $("#gradeBadge");
+  badge.textContent = judge?.grade || "---";
+  badge.className = `badge ${judge?.correct ? "" : "warn"}`.trim();
   $("#shapeScore").textContent = judge?.shape_score ?? 0;
   $("#clarityScore").textContent = judge?.clarity_score ?? 0;
   $("#strokeScore").textContent = judge?.stroke_score ?? 0;
   $("#speedScore").textContent = judge?.speed_score ?? 0;
-  $("#judgeFeedback").textContent =
-    judge?.feedback || "AI sẽ đánh giá khi bạn bắt đầu vẽ.";
+  if (!judge) {
+    $("#judgeFeedback").textContent = "AI sẽ đánh giá khi bạn bắt đầu vẽ.";
+    return;
+  }
+  const verdict = judge.correct
+    ? `AI đã nhận đúng '${judge.target}'.`
+    : `AI đoán '${judge.predicted}', mục tiêu là '${judge.target}'.`;
+  $("#judgeFeedback").textContent = `${verdict} ${judge.feedback || ""}`;
 }
 
 function renderProfile() {
   const profile = state.profile;
   const stats = profile?.stats || {};
+  const training = profile?.training || {};
   $("#profileBox").innerHTML = `
     <div class="profile-item"><span>Games</span><strong>${stats.games || 0}</strong></div>
     <div class="profile-item"><span>Best score</span><strong>${stats.best_score || 0}</strong></div>
     <div class="profile-item"><span>Drawings</span><strong>${stats.drawings || 0}</strong></div>
     <div class="profile-item"><span>Accuracy</span><strong>${stats.accuracy || 0}%</strong></div>
+    <div class="profile-item"><span>Best streak</span><strong>${stats.best_streak || 0}</strong></div>
+    <div class="profile-item"><span>Avg conf</span><strong>${stats.avg_confidence || 0}%</strong></div>
   `;
   const weaknesses = profile?.weaknesses || [];
-  $("#weaknessBox").innerHTML = weaknesses.length
+  const plan = profile?.practice_plan || [];
+  const readiness = `<div class="mini-row"><span>Train readiness</span><small>${training.ready_stroke ? "stroke ready" : "cần thêm mẫu"} · ${training.total_samples || 0} mẫu/${training.classes || 0} lớp</small></div>`;
+  const weakRows = weaknesses.length
     ? weaknesses
         .map(
           (w) =>
-            `<div class="mini-row"><span>${escapeHtml(w.target)}</span><small>${w.accuracy}% / ${w.attempts} lần</small></div>`,
+            `<div class="mini-row column"><span>${escapeHtml(w.target)} <em>${escapeHtml(w.band || "")}</em></span><small>${w.accuracy}% / ${w.attempts} lần · ${escapeHtml(w.tip || "")}</small></div>`,
         )
         .join("")
     : `<div class="mini-row"><span>Chưa có dữ liệu yếu/mạnh</span><small>Chơi vài vòng để cập nhật</small></div>`;
+  const planRows = plan.length
+    ? `<div class="mini-title">Practice plan</div>` +
+      plan
+        .map(
+          (p) =>
+            `<div class="mini-row column"><span>${escapeHtml(p.target)} · mục tiêu ${escapeHtml(String(p.accuracy))}%</span><small>${escapeHtml(p.goal)} ${escapeHtml(p.tip || "")}</small></div>`,
+        )
+        .join("")
+    : "";
+  $("#weaknessBox").innerHTML = readiness + weakRows + planRows;
 }
 
 function renderLeaderboard() {
   const rows = state.leaderboard || [];
   $("#leaderboardBox").innerHTML = rows.length
     ? rows
-        .map(
-          (r, i) =>
-            `<div class="mini-row"><span>#${i + 1} ${escapeHtml(r.username || "guest")}</span><small>${r.score || 0} pts</small></div>`,
-        )
+        .map((r, i) => {
+          const mine = r.username === state.user?.username;
+          return `<div class="mini-row ${mine ? "mine" : ""}"><span>#${i + 1} ${escapeHtml(r.username || "guest")}</span><small>${r.score || 0} pts · L${r.level || 0} · streak ${r.streak || 0}</small></div>`;
+        })
         .join("")
     : `<div class="mini-row"><span>Chưa có bảng xếp hạng</span><small>Hãy chơi 1 lượt</small></div>`;
 }
@@ -938,45 +1353,59 @@ function showCorrectFlash(text) {
   setTimeout(() => flash.classList.remove("show"), 720);
 }
 
-function countStrokePoints() {
-  return (
-    state.strokes.reduce((sum, stroke) => sum + stroke.length, 0) +
-    (state.currentStroke?.length || 0)
-  );
+function getAllCurrentStrokes() {
+  return state.strokes.concat(state.currentStroke ? [state.currentStroke] : []);
 }
 
-async function saveStrokeSample(correct = false) {
-  if (!state.currentTarget) return;
+function countStrokePoints() {
+  return getAllCurrentStrokes().reduce((sum, stroke) => sum + stroke.length, 0);
+}
+
+async function saveStrokeSample(correct = false, manual = false) {
+  if (!state.currentTarget) return null;
+  const strokes = getAllCurrentStrokes();
+  const pointCount = countStrokePoints();
+  if (!pointCount) {
+    if (manual) setStatus("Chưa có nét vẽ để lưu mẫu train.", "error");
+    return null;
+  }
+  const key = `${state.currentTarget.label}|${state.level}|${pointCount}|${correct ? 1 : 0}|${manual ? 1 : 0}`;
+  if (!manual && state.lastSavedKey === key) return null;
+  state.lastSavedKey = key;
+
   const form = new FormData();
   form.append("target", state.currentTarget.label);
   form.append("predicted", state.prediction?.label || "");
   form.append("confidence", String(state.prediction?.confidence || 0));
   form.append("correct", correct ? "1" : "0");
-  form.append("mode", state.mode);
-  form.append("strokes_json", JSON.stringify(state.strokes));
+  form.append("mode", currentInputMode());
+  form.append("strokes_json", JSON.stringify(strokes));
+  form.append("judge_json", JSON.stringify(state.judge || {}));
+  form.append("manual", manual ? "1" : "0");
+  form.append("point_count", String(pointCount));
   try {
-    await apiPostForm("/game/stroke", form);
+    const data = await apiPostForm("/game/stroke", form);
+    await refreshProfileAndLeaderboard();
+    renderProfile();
+    setStatus(
+      correct
+        ? `Đã lưu mẫu đúng #${data.sample_id} cho '${data.target}' (${data.point_count} điểm).`
+        : `Đã lưu mẫu train #${data.sample_id} cho '${data.target}' để AI học lỗi/khó.`,
+      correct ? "ok" : "",
+    );
+    return data;
   } catch (err) {
     console.warn(err);
+    if (manual) setStatus(`Lưu mẫu lỗi: ${err.message}`, "error");
+    return null;
   }
-  setStatus(
-    correct
-      ? "Đã lưu mẫu đúng vào dataset game."
-      : "Đã lưu mẫu vẽ vào dataset game.",
-    correct ? "ok" : "",
-  );
 }
 
 async function tryStrokePrediction() {
   if (!state.currentTarget || countStrokePoints() < 8) return null;
   try {
     const form = new FormData();
-    form.append(
-      "strokes_json",
-      JSON.stringify(
-        state.strokes.concat(state.currentStroke ? [state.currentStroke] : []),
-      ),
-    );
+    form.append("strokes_json", JSON.stringify(getAllCurrentStrokes()));
     form.append("target", state.currentTarget.label);
     const data = await apiPostForm("/predict_stroke", form);
     state.strokeModelAvailable = Boolean(data.available);
@@ -1062,8 +1491,8 @@ function renderPvp(players = []) {
   const playerRows = players.length
     ? players
         .map(
-          (p) =>
-            `<div class="mini-row"><span>${escapeHtml(p.username || "guest")}</span><small>${p.score || 0} pts</small></div>`,
+          (p, i) =>
+            `<div class="mini-row"><span>#${i + 1} ${escapeHtml(p.username || "guest")}</span><small>${p.score || 0} pts · L${p.level || 1} · ${escapeHtml(p.target || "waiting")}</small></div>`,
         )
         .join("")
     : `<div class="mini-row"><span>${state.pvpConnected ? "Đang chờ người chơi" : "Chưa vào phòng"}</span><small>${escapeHtml(state.pvpRoom)}</small></div>`;
@@ -1081,7 +1510,15 @@ async function exportDataset() {
   const box = $("#retrainBox");
   try {
     const data = await apiGet("/dataset/export");
-    box.innerHTML = `<div class="mini-row"><span>Export OK</span><small>${data.samples} samples</small></div><div class="mini-row"><span>Download</span><small>${data.download}</small></div>`;
+    const downloads = data.downloads || {};
+    const ready = data.training_readiness || {};
+    box.innerHTML = `
+      <div class="mini-row"><span>Export OK</span><small>${data.samples || 0} mẫu · ${data.classes || 0} lớp</small></div>
+      <div class="mini-row column"><span>Files</span><small>JSONL: ${escapeHtml(downloads.jsonl || "-")} · CSV: ${escapeHtml(downloads.csv || "-")} · Manifest: ${escapeHtml(downloads.manifest || "-")}</small></div>
+      <div class="mini-row"><span>Train stroke</span><small>${ready.ready_stroke ? "ready" : "cần thêm mẫu/lớp"}</small></div>
+    `;
+    await refreshProfileAndLeaderboard();
+    renderProfile();
   } catch (err) {
     box.innerHTML = `<div class="mini-row"><span>Export lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
   }
@@ -1092,12 +1529,30 @@ async function startRetrain(mode) {
   const form = new FormData();
   form.append("mode", mode);
   form.append("epochs", mode === "stroke" ? "8" : "5");
+  state.imageModelReloaded = false;
   try {
     const data = await apiPostForm("/admin/retrain/start", form);
-    box.innerHTML = `<div class="mini-row"><span>Retrain ${escapeHtml(mode)}</span><small>${data.ok ? "running" : "busy"}</small></div>`;
+    box.innerHTML = `<div class="mini-row"><span>Retrain ${escapeHtml(mode)}</span><small>${data.ok ? `running · pid ${data.pid}` : "busy"}</small></div>`;
     setTimeout(refreshRetrainStatus, 1200);
   } catch (err) {
-    box.innerHTML = `<div class="mini-row"><span>Retrain lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    box.innerHTML = `<div class="mini-row column"><span>Retrain lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function reloadImageModel() {
+  const form = new FormData();
+  form.append("kind", "self_improved");
+  try {
+    const data = await apiPostForm("/admin/model/reload", form);
+    state.imageModelReloaded = true;
+    await loadGameData();
+    updateHud();
+    renderProfile();
+    setStatus(`Đã reload model ảnh mới (${data.model?.num_recognition_categories || "?"} lớp).`, "ok");
+    return data;
+  } catch (err) {
+    console.warn(err);
+    return null;
   }
 }
 
@@ -1107,7 +1562,27 @@ async function refreshRetrainStatus() {
   try {
     const data = await apiGet("/admin/retrain/status");
     state.retrainStatus = data;
-    box.innerHTML = `<div class="mini-row"><span>${escapeHtml(data.status || "idle")}</span><small>${escapeHtml(data.mode || "-")}</small></div><div class="mini-row"><span>${escapeHtml(data.message || "")}</span><small>${data.process_running ? "running" : "stopped"}</small></div>`;
+    const ready = data.training_readiness || {};
+    const jobs = data.recent_jobs || [];
+    const logTail = data.log_tail
+      ? `<pre class="log-tail">${escapeHtml(data.log_tail)}</pre>`
+      : "";
+    const jobRows = jobs
+      .slice(0, 2)
+      .map(
+        (j) =>
+          `<div class="mini-row"><span>#${j.id} ${escapeHtml(j.mode)}</span><small>${escapeHtml(j.status)} · ${j.samples || 0} mẫu</small></div>`,
+      )
+      .join("");
+    box.innerHTML = `
+      <div class="mini-row"><span>${escapeHtml(data.status || "idle")}</span><small>${escapeHtml(data.mode || "-")} · ${data.process_running ? "running" : "stopped"}</small></div>
+      <div class="mini-row column"><span>${escapeHtml(data.message || "")}</span><small>samples ${ready.total_samples || 0}, classes ${ready.classes || 0}, min/class ${ready.min_samples_per_class || 0}</small></div>
+      ${jobRows}
+      ${logTail}
+    `;
+    if (data.status === "done" && data.mode === "image" && data.self_improved_model_exists && !state.imageModelReloaded) {
+      await reloadImageModel();
+    }
     if (data.process_running) setTimeout(refreshRetrainStatus, 2500);
   } catch (err) {
     box.innerHTML = `<div class="mini-row"><span>Status lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
@@ -1124,19 +1599,98 @@ function speakCurrentWord() {
   window.speechSynthesis.speak(utter);
 }
 
+
+function loadScriptOnce(src, globalTest, timeoutMs = 9000) {
+  if (globalTest()) return Promise.resolve(true);
+  const existing = [...document.scripts].find((script) => script.src === src || script.src.includes(src.split("/").slice(-2).join("/")));
+  if (existing) {
+    return new Promise((resolve) => {
+      existing.addEventListener("load", () => resolve(Boolean(globalTest())), { once: true });
+      existing.addEventListener("error", () => resolve(false), { once: true });
+      setTimeout(() => resolve(Boolean(globalTest())), timeoutMs);
+    });
+  }
+  return new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.defer = true;
+    script.onload = () => resolve(Boolean(globalTest()));
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+    setTimeout(() => resolve(Boolean(globalTest())), timeoutMs);
+  });
+}
+
+async function ensureHandsReady() {
+  const loaded = await loadScriptOnce(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js",
+    () => Boolean(window.Hands),
+  );
+  if (!loaded) throw new Error("MediaPipe Hands could not be loaded");
+  if (state.hands) return true;
+  state.hands = new window.Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+  });
+  state.hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.65,
+    minTrackingConfidence: 0.6,
+  });
+  state.hands.onResults(onHandResults);
+  return true;
+}
+
+async function ensureFaceMeshReady() {
+  const loaded = await loadScriptOnce(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js",
+    () => Boolean(window.FaceMesh),
+  );
+  if (!loaded) throw new Error("MediaPipe FaceMesh could not be loaded");
+  if (state.faceMesh) return true;
+  state.faceMesh = new window.FaceMesh({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+  });
+  state.faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.65,
+    minTrackingConfidence: 0.6,
+  });
+  state.faceMesh.onResults(onFaceResults);
+  return true;
+}
+
 async function startCamera() {
   const video = $("#cameraVideo");
   const stage = $("#gameStage");
   if (!video) {
     setStatus("Không tìm thấy khung video camera. Hãy tải lại trang.", "error");
-    return;
+    return false;
   }
-  if (!navigator.mediaDevices?.getUserMedia) {
+
+  // Camera (getUserMedia) CHỈ hoạt động ở "ngữ cảnh bảo mật": https://, hoặc
+  // http://localhost / 127.0.0.1. Nếu mở bằng IP mạng LAN (vd http://192.168.x.x)
+  // trình duyệt sẽ chặn và navigator.mediaDevices thường là undefined.
+  const localHosts = ["localhost", "127.0.0.1", "[::1]", "::1"];
+  const isLocal = localHosts.includes(location.hostname);
+  if (!window.isSecureContext && !isLocal) {
     setStatus(
-      "Trình duyệt không hỗ trợ camera API (getUserMedia). Dùng Chrome/Edge mới nhất.",
+      `Trình duyệt CHẶN camera vì trang không chạy ở ngữ cảnh bảo mật ` +
+        `(đang mở: ${location.origin}). Hãy mở game bằng http://localhost:8000 ` +
+        `(KHÔNG dùng địa chỉ IP mạng LAN), hoặc bật HTTPS.`,
       "error",
     );
-    return;
+    return false;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus(
+      "Trình duyệt không hỗ trợ camera API (getUserMedia). Hãy dùng Chrome/Edge " +
+        "mới nhất và mở qua http://localhost:8000.",
+      "error",
+    );
+    return false;
   }
 
   // Đảm bảo class camera-mode để CSS hiển thị video (phòng trường hợp toggle bị lệch)
@@ -1162,10 +1716,7 @@ async function startCamera() {
         // Vẫn tiếp tục, nhiều trường hợp stream vẫn chạy
       });
       state.cameraStream = stream;
-      setStatus(
-        "Camera đã bật. Dùng ngón trỏ để vẽ, mở bàn tay để xóa nhanh.",
-        "ok",
-      );
+      setStatus(cameraInstruction(), "ok");
     } catch (err) {
       // Dọn stream nếu đã xin được quyền nhưng play/src lỗi
       if (stream) {
@@ -1173,13 +1724,21 @@ async function startCamera() {
       }
       state.cameraStream = null;
 
-      let msg = `Không mở được camera: ${err.message || err.name}`;
+      console.error("getUserMedia error:", err.name, err.message, err);
+      let msg = `Không mở được camera: ${err.name} - ${err.message || ""}`;
       if (
         err.name === "NotAllowedError" ||
         err.name === "PermissionDeniedError"
       ) {
         msg =
-          "Bạn đã từ chối quyền camera hoặc hệ thống chặn. Vào chrome://settings/content/camera để cho phép, rồi thử lại.";
+          "Bạn đã từ chối quyền camera HOẶC Windows đang chặn. Sửa: (1) bấm ổ khóa cạnh thanh địa chỉ -> Camera -> Allow; (2) Windows Settings -> Privacy & security -> Camera -> bật 'Camera access' và cho phép trình duyệt. Rồi tải lại trang.";
+      } else if (
+        err.name === "NotReadableError" ||
+        err.name === "TrackStartError" ||
+        err.name === "AbortError"
+      ) {
+        msg =
+          "Camera đang bị ứng dụng khác chiếm dụng (Zoom/Teams/OBS/Camera app...) hoặc driver lỗi. Hãy ĐÓNG các app đó, rồi tải lại trang và thử lại.";
       } else if (
         err.name === "NotFoundError" ||
         err.name === "DevicesNotFoundError"
@@ -1205,89 +1764,244 @@ async function startCamera() {
           // Tiếp tục init MediaPipe bên dưới
         } catch (e2) {
           setStatus(msg, "error");
-          return;
+          return false;
         }
       } else {
         setStatus(msg, "error");
-        return;
+        return false;
       }
     }
   }
 
-  // Khởi tạo MediaPipe Hands (bọc try/catch để camera vẫn bật dù MP lỗi)
-  if (!state.hands) {
-    if (window.Hands) {
-      try {
-        state.hands = new window.Hands({
-          locateFile: (file) =>
-            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-        });
-        state.hands.setOptions({
-          maxNumHands: 1,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.65,
-          minTrackingConfidence: 0.6,
-        });
-        state.hands.onResults(onHandResults);
-      } catch (mpErr) {
-        console.warn("MediaPipe init error:", mpErr);
-        setStatus(
-          "MediaPipe khởi tạo lỗi. Camera vẫn mở nhưng tracking ngón tay có thể không ổn định.",
-          "error",
-        );
+  try {
+    if (state.cameraTool === "face") {
+      state.handLoop = false;
+      await ensureFaceMeshReady();
+      if (state.faceMesh && !state.faceLoop) {
+        state.faceLoop = true;
+        faceFrameLoop();
       }
     } else {
-      setStatus(
-        "Đang tải MediaPipe... Nếu không có tracking, hãy tải lại trang (F5). Camera vẫn dùng được.",
-        "error",
-      );
-      // Thử load lại script nếu thiếu (rất hiếm)
-      if (!document.querySelector('script[src*="mediapipe/hands"]')) {
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js";
-        s.defer = true;
-        document.head.appendChild(s);
+      state.faceLoop = false;
+      await ensureHandsReady();
+      if (state.hands && !state.handLoop) {
+        state.handLoop = true;
+        handFrameLoop();
       }
     }
+  } catch (err) {
+    console.warn("MediaPipe init error:", err);
+    setStatus(`${err.message}. Camera đã bật nhưng bộ nhận diện đang chọn chưa sẵn sàng.`, "error");
   }
-
-  if (state.hands && !state.handLoop) {
-    state.handLoop = true;
-    handFrameLoop();
-  }
+  updateCameraToolUI();
+  return true;
 }
 
 function stopCamera() {
   state.handLoop = false;
+  state.faceLoop = false;
   if (state.cameraStream) {
     state.cameraStream.getTracks().forEach((track) => track.stop());
     state.cameraStream = null;
   }
   const video = $("#cameraVideo");
   if (video) video.srcObject = null;
+  $("#handCanvas")?.getContext("2d")?.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  $("#faceCanvas")?.getContext("2d")?.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  state.faceDrawingActive = false;
+  state.faceFilteredPoint = null;
+  state.faceCenter = null;
+  state.faceStatus = null;
   state.filteredPoint = null;
+  state.penLiftFrames = 0;
+  state.lastMid = null;
+  clearFaceOverlay();
+}
+
+async function waitNextFrame() {
+  await new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
 async function handFrameLoop() {
-  const video = $("#cameraVideo");
-  while (state.handLoop && state.hands && video?.readyState >= 2) {
+  while (state.handLoop && state.hands) {
+    const video = $("#cameraVideo");
+    if (!video || video.readyState < 2 || state.mode !== "camera" || state.cameraTool !== "hand") {
+      await waitNextFrame();
+      continue;
+    }
     try {
       await state.hands.send({ image: video });
     } catch (err) {
       console.warn(err);
     }
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await waitNextFrame();
   }
 }
 
+async function faceFrameLoop() {
+  while (state.faceLoop && state.faceMesh) {
+    const video = $("#cameraVideo");
+    if (!video || video.readyState < 2 || state.mode !== "camera" || state.cameraTool !== "face") {
+      await waitNextFrame();
+      continue;
+    }
+    try {
+      await state.faceMesh.send({ image: video });
+    } catch (err) {
+      console.warn(err);
+    }
+    await waitNextFrame();
+  }
+}
+
+
+function onFaceResults(results) {
+  if (state.cameraTool !== "face") return;
+  const canvas = $("#faceCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  const landmarks = results.multiFaceLandmarks?.[0];
+  if (!landmarks) {
+    state.faceStatus = { faceDetected: false, ready: false, status: "chưa thấy mặt" };
+    state.faceDrawingActive = false;
+    updateCameraToolUI();
+    liftPenDebounced();
+    return;
+  }
+  const metrics = getFaceDrawingMetrics(landmarks);
+  state.faceDrawingActive = Boolean(metrics.mouthOpen);
+  state.faceStatus = {
+    faceDetected: true,
+    ready: metrics.mouthOpen,
+    status: metrics.mouthOpen ? "đang vẽ" : "há miệng để vẽ",
+  };
+  updateCameraToolUI();
+  drawFaceOverlay(ctx, landmarks, metrics);
+
+  if (metrics.bothEyesClosed && Date.now() - state.faceLastClear > 1600) {
+    state.faceLastClear = Date.now();
+    clearDrawing();
+    setStatus("Bút mặt: phát hiện chớp mắt, đã xóa nét.");
+    return;
+  }
+  if (!state.running && !state.currentTarget) return;
+  if (!metrics.mouthOpen) {
+    updateFaceCenter(metrics.nose, false);
+    liftPenDebounced();
+    return;
+  }
+  state.penLiftFrames = 0;
+  updateFaceCenter(metrics.nose, true);
+  const point = smoothFacePoint(mapFacePointToCanvas(metrics.nose));
+  if (!state.currentStroke) beginStroke(point);
+  else extendStroke(point);
+}
+
+function getFaceDrawingMetrics(landmarks) {
+  const p = (idx) => landmarks[idx] || landmarks[1];
+  const dist = (a, b) => Math.hypot((a.x - b.x) * CANVAS_W, (a.y - b.y) * CANVAS_H);
+  const nose = p(1);
+  const faceHeight = Math.max(1, dist(p(10), p(152)));
+  const mouthRatio = dist(p(13), p(14)) / faceHeight;
+  const leftEyeRatio = dist(p(159), p(145)) / Math.max(1, dist(p(33), p(133)));
+  const rightEyeRatio = dist(p(386), p(374)) / Math.max(1, dist(p(362), p(263)));
+  return {
+    nose,
+    mouthRatio,
+    mouthOpen: mouthRatio >= FACE_DRAW_MOUTH_THRESHOLD,
+    leftEyeRatio,
+    rightEyeRatio,
+    bothEyesClosed: leftEyeRatio <= FACE_CLEAR_BLINK_THRESHOLD && rightEyeRatio <= FACE_CLEAR_BLINK_THRESHOLD,
+  };
+}
+
+function updateFaceCenter(nose, drawing) {
+  if (!state.faceCenter) {
+    state.faceCenter = { x: nose.x, y: nose.y };
+    return;
+  }
+  if (drawing) return;
+  state.faceCenter.x += (nose.x - state.faceCenter.x) * FACE_CENTER_DRIFT_ALPHA;
+  state.faceCenter.y += (nose.y - state.faceCenter.y) * FACE_CENTER_DRIFT_ALPHA;
+}
+
+function mapFacePointToCanvas(nose) {
+  if (!state.faceCenter) state.faceCenter = { x: nose.x, y: nose.y };
+  const x = CANVAS_W / 2 + (state.faceCenter.x - nose.x) * CANVAS_W * FACE_GAIN;
+  const y = CANVAS_H / 2 + (nose.y - state.faceCenter.y) * CANVAS_H * FACE_GAIN;
+  return {
+    x: Math.max(8, Math.min(CANVAS_W - 8, x)),
+    y: Math.max(8, Math.min(CANVAS_H - 8, y)),
+    t: performance.now(),
+    source: "face-nose",
+  };
+}
+
+function smoothFacePoint(point) {
+  if (!state.faceFilteredPoint) {
+    state.faceFilteredPoint = point;
+    return point;
+  }
+  const dx = point.x - state.faceFilteredPoint.x;
+  const dy = point.y - state.faceFilteredPoint.y;
+  const dist = Math.hypot(dx, dy);
+  const alpha = Math.min(0.82, Math.max(0.22, dist / 120));
+  state.faceFilteredPoint = {
+    x: state.faceFilteredPoint.x + dx * alpha,
+    y: state.faceFilteredPoint.y + dy * alpha,
+    t: point.t,
+    source: "face-nose",
+  };
+  return state.faceFilteredPoint;
+}
+
+function drawFaceOverlay(ctx, landmarks, metrics) {
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = metrics.mouthOpen ? "rgba(85, 230, 165, 0.95)" : "rgba(255, 207, 87, 0.95)";
+  ctx.fillStyle = metrics.mouthOpen ? "rgba(85, 230, 165, 0.9)" : "rgba(255, 207, 87, 0.85)";
+  const xy = (idx) => {
+    const p = landmarks[idx];
+    return { x: (1 - p.x) * CANVAS_W, y: p.y * CANVAS_H };
+  };
+  const chains = [
+    [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10],
+    [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33],
+    [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466, 263],
+    [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61],
+    [1, 2, 98, 327, 1],
+  ];
+  for (const chain of chains) {
+    ctx.beginPath();
+    chain.forEach((idx, i) => {
+      if (!landmarks[idx]) return;
+      const p = xy(idx);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  }
+  const cursor = mapFacePointToCanvas(metrics.nose);
+  ctx.beginPath();
+  ctx.arc(cursor.x, cursor.y, metrics.mouthOpen ? 13 : 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = "700 15px system-ui";
+  ctx.fillText(metrics.mouthOpen ? "VẼ" : "NHẤC", cursor.x + 14, cursor.y - 10);
+  ctx.restore();
+}
+
 function onHandResults(results) {
+  if (state.cameraTool !== "hand") return;
   const canvas = $("#handCanvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   const landmarks = results.multiHandLandmarks?.[0];
   if (!landmarks) {
-    if (state.currentStroke) endStroke();
+    // Mất tay 1-2 frame là chuyện thường của MediaPipe -> KHÔNG ngắt nét ngay,
+    // chờ đủ số frame mới nhấc bút để nét không bị đứt khúc.
+    liftPenDebounced();
     return;
   }
   drawHandSkeleton(ctx, landmarks);
@@ -1301,14 +2015,16 @@ function onHandResults(results) {
   if (openPalm && now - state.lastPalmClear > 1600) {
     state.lastPalmClear = now;
     clearDrawing();
-    setStatus("Open palm: đã xóa nét.");
+    setStatus("Đã xóa nét bằng thao tác xòe bàn tay.");
     return;
   }
   if (!state.running && !state.currentTarget) return;
   if (!indexUp) {
-    if (state.currentStroke) endStroke();
+    liftPenDebounced();
     return;
   }
+  // Ngón trỏ đang vẽ -> reset bộ đếm nhấc bút
+  state.penLiftFrames = 0;
   const raw = {
     x: (1 - index.x) * CANVAS_W,
     y: index.y * CANVAS_H,
@@ -1319,15 +2035,34 @@ function onHandResults(results) {
   else extendStroke(p);
 }
 
+// Chỉ thực sự kết thúc nét khi ngón trỏ hạ/mất tay LIÊN TỤC đủ lâu, tránh đứt
+// nét do nhiễu nhận diện ở từng frame riêng lẻ.
+const PEN_LIFT_FRAMES = 5;
+function liftPenDebounced() {
+  if (!state.currentStroke) return;
+  state.penLiftFrames = (state.penLiftFrames || 0) + 1;
+  if (state.penLiftFrames >= PEN_LIFT_FRAMES) {
+    endStroke();
+    state.penLiftFrames = 0;
+    if (state.cameraTool === "face") state.faceFilteredPoint = null;
+    else state.filteredPoint = null;
+  }
+}
+
+// Làm mượt thích ứng (adaptive EMA): di chuyển NHANH -> bám sát (ít trễ); di
+// chuyển CHẬM -> mượt hơn (ít rung). Giúp nét vừa liền vừa đỡ "lệch".
 function smoothPoint(point) {
   if (!state.filteredPoint) {
     state.filteredPoint = point;
     return point;
   }
-  const alpha = 0.38;
+  const dx = point.x - state.filteredPoint.x;
+  const dy = point.y - state.filteredPoint.y;
+  const dist = Math.hypot(dx, dy);
+  const alpha = Math.min(0.85, Math.max(0.3, dist / 90));
   state.filteredPoint = {
-    x: state.filteredPoint.x * (1 - alpha) + point.x * alpha,
-    y: state.filteredPoint.y * (1 - alpha) + point.y * alpha,
+    x: state.filteredPoint.x + dx * alpha,
+    y: state.filteredPoint.y + dy * alpha,
     t: point.t,
   };
   return state.filteredPoint;

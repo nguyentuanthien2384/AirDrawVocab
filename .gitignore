@@ -72,3 +72,5 @@ data/benchmark/
 # Jupyter / local notebooks
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+
+data/self_improve_export/

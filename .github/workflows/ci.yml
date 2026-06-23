@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # Chỉ cài deps gọn nhẹ để chạy unit test. Các test cần TensorFlow/OpenCV
+      # sẽ tự động bị skip (pytest.importorskip) nên CI vẫn nhanh và ổn định.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy>=1.26,<2.3" "pytest>=8.0,<9.0" pillow
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v
+
+      - name: Smoke test ML CLI tools
+        run: |
+          python src/utils/model_registry.py rebuild
+          python src/data/data_versioning.py || true

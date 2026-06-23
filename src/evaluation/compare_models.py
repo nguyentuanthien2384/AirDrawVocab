@@ -29,9 +29,20 @@ from sklearn.metrics import (
 )
 from tensorflow import keras
 
+# --- bootstrap: thêm thư mục gốc dự án vào sys.path ---
+import os as _os
+import sys as _sys
+_PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+if _PROJECT_ROOT not in _sys.path:
+    _sys.path.insert(0, _PROJECT_ROOT)
+try:
+    _sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from config import ROOT, MODELS_DIR, RANDOM_STATE
-from data_utils import load_dataset, split_dataset
-from mlflow_utils import start_mlflow_run, log_metrics, end_mlflow_run
+from src.data.data_utils import load_dataset, split_dataset
+from src.utils.mlflow_utils import start_mlflow_run, log_metrics, end_mlflow_run
 
 REPORTS_DIR = ROOT / "assets" / "reports" / "comparisons"
 
@@ -85,6 +96,9 @@ def main() -> int:
     ap.add_argument("--include-versions", action="store_true",
                     help="Gồm cả các bản trong models/versions/")
     ap.add_argument("--seed", type=int, default=RANDOM_STATE)
+    ap.add_argument("--benchmark", default=None,
+                    help="Đường dẫn .npz benchmark (tạo bằng make_benchmark.py). "
+                         "Nếu có sẽ dùng thay cho split mặc định.")
     ap.add_argument("--no-mlflow", action="store_true", help="Không log vào MLflow")
     args = ap.parse_args()
 
@@ -103,11 +117,20 @@ def main() -> int:
         print("Không tìm thấy model nào để so sánh.")
         return 1
 
-    print(f"Sẽ so sánh {len(model_paths)} model trên tập test cố định (seed={args.seed}).")
-    print("Nạp dữ liệu...")
-    X, y = load_dataset()
-    _, _, x_test, _, _, y_test = split_dataset(X, y, seed=args.seed)
-    x_test = x_test.reshape(-1, 28, 28, 1)
+    print(f"Sẽ so sánh {len(model_paths)} model.")
+    if args.benchmark:
+        bench_path = Path(args.benchmark)
+        if not bench_path.is_absolute():
+            bench_path = ROOT / bench_path
+        print(f"Nạp benchmark cố định: {bench_path}")
+        data = np.load(bench_path, allow_pickle=True)
+        x_test = data["x"].reshape(-1, 28, 28, 1).astype("float32")
+        y_test = data["y"].astype("int64")
+    else:
+        print(f"Nạp dữ liệu (split cố định, seed={args.seed})...")
+        X, y = load_dataset()
+        _, _, x_test, _, _, y_test = split_dataset(X, y, seed=args.seed)
+        x_test = x_test.reshape(-1, 28, 28, 1)
     print(f"Test samples: {len(y_test)}\n")
 
     results = []

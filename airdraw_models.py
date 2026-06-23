@@ -186,13 +186,48 @@ def compile_advanced(model: keras.Model, num_train: int, batch: int, epochs: int
 
 
 # ============================ TTA + ENSEMBLE =======================
-def predict_tta(model: keras.Model, x: np.ndarray, n: int = 6, pad: int = 3) -> np.ndarray:
-    """Trung bình dự đoán trên ảnh gốc + n bản dịch nhẹ -> ổn định/chính xác hơn."""
-    probs = [model.predict(x, verbose=0)]
-    for _ in range(n):
-        xs = tf.image.random_crop(
-            tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]]), tf.shape(x))
-        probs.append(model.predict(xs.numpy() if hasattr(xs, "numpy") else xs, verbose=0))
+def _shift_batch(x: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    """Dịch batch ảnh (N,H,W,C) đi (dx, dy) pixel, lấp 0 (không wrap)."""
+    if dx == 0 and dy == 0:
+        return x
+    out = np.zeros_like(x)
+    h, w = x.shape[1], x.shape[2]
+    sy0, sy1 = max(0, -dy), h - max(0, dy)
+    sx0, sx1 = max(0, -dx), w - max(0, dx)
+    dy0, dy1 = max(0, dy), h - max(0, -dy)
+    dx0, dx1 = max(0, dx), w - max(0, -dx)
+    out[:, dy0:dy1, dx0:dx1, :] = x[:, sy0:sy1, sx0:sx1, :]
+    return out
+
+
+def _tta_offsets(n: int, max_shift: int) -> list[tuple[int, int]]:
+    """Sinh tập dịch TẤT ĐỊNH (deterministic): (0,0) trước, rồi lan dần ra ngoài.
+
+    Sắp theo khoảng cách Manhattan để n nhỏ vẫn lấy các view gần (ổn định nhất).
+    """
+    grid = [(dx, dy)
+            for dx in range(-max_shift, max_shift + 1)
+            for dy in range(-max_shift, max_shift + 1)]
+    grid.sort(key=lambda o: (abs(o[0]) + abs(o[1]), abs(o[0]), abs(o[1])))
+    return grid[:max(1, n + 1)]  # +1 để luôn gồm ảnh gốc (0,0)
+
+
+def predict_tta(model: keras.Model, x: np.ndarray, n: int = 6,
+                pad: int = 3, max_shift: int = 2) -> np.ndarray:
+    """Test-Time Augmentation TẤT ĐỊNH: trung bình xác suất trên ảnh gốc + các bản
+    dịch nhẹ theo lưới cố định.
+
+    Ưu điểm so với bản random_crop cũ:
+      - Tái lập được (không phụ thuộc seed ngẫu nhiên của TF).
+      - Bao phủ đều các hướng dịch -> ổn định hơn, ít nhiễu.
+      - Lấp viền bằng 0 (không wrap) nên không tạo nét vẽ giả.
+
+    `n` là số view dịch thêm; `max_shift` là biên độ dịch tối đa (pixel).
+    `pad` giữ lại cho tương thích chữ ký cũ (không dùng).
+    """
+    x = np.asarray(x, dtype="float32")
+    offsets = _tta_offsets(n, max_shift)
+    probs = [model.predict(_shift_batch(x, dx, dy), verbose=0) for dx, dy in offsets]
     return np.mean(probs, axis=0)
 
 

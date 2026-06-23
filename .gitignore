@@ -66,6 +66,9 @@ mlartifacts/
 # Versioned models + metadata (Phase 1 - tự sinh)
 models/versions/
 
+# Benchmark test set (Phase 2 - tự sinh bằng make_benchmark.py)
+data/benchmark/
+
 # Jupyter / local notebooks
 .ipynb_checkpoints/
 *.ipynb_checkpoints

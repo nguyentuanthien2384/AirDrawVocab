@@ -32,5 +32,8 @@ seaborn>=0.13,<0.14
 # vẫn chạy bình thường (mlflow_utils.py tự động bỏ qua tracking).
 mlflow>=2.12.0,<3.0
 
+# Testing (Phase 3 - dev/CI). Dùng để chạy bộ test trong tests/.
+pytest>=8.0,<9.0
+
 # Windows runtime helper
 msvc-runtime>=14.40; platform_system == "Windows"

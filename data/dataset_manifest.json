@@ -1,0 +1,291 @@
+{
+  "generated_at": "2026-06-22T14:06:42",
+  "with_hash": false,
+  "quickdraw_npy": {
+    "num_classes_expected": 40,
+    "num_classes_present": 19,
+    "total_samples": 152000,
+    "total_size_mb": 113.65,
+    "classes": {
+      "apple": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "baseball": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "book": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "bowtie": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "diamond": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "dog": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "door": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "envelope": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "eye": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "fish": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "hat": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "leaf": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "lightning": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "moon": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "pants": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "scissors": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "square": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "star": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "t-shirt": {
+        "present": true,
+        "samples": 8000,
+        "shape": [
+          8000,
+          784
+        ],
+        "dtype": "uint8",
+        "size_bytes": 6272128
+      },
+      "cat": {
+        "present": false
+      },
+      "sun": {
+        "present": false
+      },
+      "tree": {
+        "present": false
+      },
+      "flower": {
+        "present": false
+      },
+      "cloud": {
+        "present": false
+      },
+      "umbrella": {
+        "present": false
+      },
+      "key": {
+        "present": false
+      },
+      "cup": {
+        "present": false
+      },
+      "clock": {
+        "present": false
+      },
+      "car": {
+        "present": false
+      },
+      "bicycle": {
+        "present": false
+      },
+      "airplane": {
+        "present": false
+      },
+      "house": {
+        "present": false
+      },
+      "banana": {
+        "present": false
+      },
+      "ice cream": {
+        "present": false
+      },
+      "cake": {
+        "present": false
+      },
+      "candle": {
+        "present": false
+      },
+      "guitar": {
+        "present": false
+      },
+      "hammer": {
+        "present": false
+      },
+      "bed": {
+        "present": false
+      },
+      "chair": {
+        "present": false
+      }
+    }
+  },
+  "stroke_db": {
+    "present": true,
+    "total_stroke_samples": 63,
+    "distinct_targets": 19,
+    "per_target": {
+      "pants": 13,
+      "lightning": 5,
+      "leaf": 5,
+      "t-shirt": 4,
+      "baseball": 4,
+      "scissors": 3,
+      "fish": 3,
+      "eye": 3,
+      "envelope": 3,
+      "door": 3,
+      "book": 3,
+      "moon": 2,
+      "hat": 2,
+      "dog": 2,
+      "diamond": 2,
+      "bowtie": 2,
+      "apple": 2,
+      "star": 1,
+      "square": 1
+    }
+  }
+}

@@ -1,8 +1,6 @@
 {
-  "status": "done",
-  "message": "Self-improved image model trained",
-  "mode": "image",
-  "samples": 15201,
-  "classes": 19,
-  "model": "C:\\Users\\Admin\\Downloads\\AirDrawVocab\\models\\airdrawvocab_self_improved.keras"
+  "status": "idle",
+  "message": "Sẵn sàng export/train. Lỗi charmap cũ đã được xử lý bằng UTF-8 trong backend và training scripts.",
+  "updated_at": "2026-06-23T06:54:28.548261+00:00",
+  "mode": "-"
 }

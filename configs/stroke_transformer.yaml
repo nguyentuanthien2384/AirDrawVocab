@@ -1,0 +1,19 @@
+model:
+  name: stroke_transformer
+  max_len: 96
+  num_features: 9
+  d_model: 64
+  heads: 4
+  ff_dim: 128
+  blocks: 2
+  dropout: 0.20
+training:
+  seed: 42
+  epochs: 20
+  batch_size: 16
+  learning_rate: 0.0007
+  validation_ratio: 0.15
+  min_points: 4
+release:
+  min_accuracy: 0.70
+  min_macro_f1: 0.65

@@ -505,3 +505,20 @@ python face_cli.py verify --camera 1
 
 Bản này đã phát triển thêm dashboard, đăng ký/đăng nhập SQLite, nhận diện ảnh upload, tab kết quả, đọc thông tin bằng giọng nói trình duyệt và khu vực demo/analytics. Chi tiết xem `UI_REFERENCE_DEVELOPMENT_NOTES.md`. Các chức năng này bám theo dự án AirDrawVocab 40 từ vựng, không chuyển hướng sang đề tài nhận diện bệnh mắt.
 
+
+## Production Deep Learning Upgrade
+
+Bản cập nhật này bổ sung pipeline nhận dạng chuyên nghiệp hơn cho Final Boss Mode:
+
+```bash
+python src/data/make_real_user_benchmark.py --out data/benchmark/release_v1
+python src/training/train_image_model.py --config configs/image_resnet_sketch.yaml
+python src/training/train_stroke_model.py --epochs 18
+python src/evaluation/evaluate_release.py --benchmark data/benchmark/release_v1 --out assets/reports/releases/current
+python src/evaluation/calibrate_release.py --benchmark data/benchmark/release_v1
+python src/training/promote_candidate.py --dry-run --allow-if-weak-data
+```
+
+Trong giao diện web, khối **Production AI Ops** có thể build benchmark, evaluate release và kiểm tra promotion ngay sau khi chơi/lưu mẫu train.
+
+Chi tiết xem `PRODUCTION_DEEP_LEARNING_UPGRADE.md` và `PROFESSIONAL_COMPLETION_SUMMARY.md`.

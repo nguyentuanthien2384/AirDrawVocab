@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-TARGET_BOX = 20   # nét vẽ được scale vừa khung 20x20 (chuẩn MNIST/QuickDraw)
+TARGET_BOX = 22   # tăng nhẹ từ 20 -> 22 để giữ chi tiết nhỏ như gáy/trang sách
 CANVAS = 28
 CENTER = (CANVAS - 1) / 2.0  # 13.5
 
@@ -58,13 +58,32 @@ def preprocess_drawing(image_bytes: bytes, deskew: bool = False) -> np.ndarray:
     if float(gray.mean()) > 127:
         gray = 255 - gray
 
-    _, thresh = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
+    # Nét vẽ web/camera thường anti-aliased và rất mảnh. Khi ép xuống 28x28,
+    # các chi tiết nhận dạng như trang sách có thể biến mất. Vì vậy ta tạo mask
+    # bằng Otsu rồi làm dày nhẹ TRƯỚC khi resize. Đây là tối ưu inference, không
+    # cần train lại model và đặc biệt giảm nhầm book/door/pants.
+    _, rough = cv2.threshold(gray, 12, 255, cv2.THRESH_BINARY)
+    values = gray[rough > 0]
+    if values.size:
+        # Otsu trên vùng có mực giúp ổn định với nét nhạt/camera.
+        local = np.zeros_like(gray)
+        local[rough > 0] = values
+        _, thresh = cv2.threshold(local, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:
+        thresh = rough
     coords = cv2.findNonZero(thresh)
     if coords is None:
         return np.zeros((1, CANVAS, CANVAS, 1), dtype="float32")
 
     x, y, w, h = cv2.boundingRect(coords)
     gray = gray[y:y + h, x:x + w]
+    thresh_crop = thresh[y:y + h, x:x + w]
+
+    # Làm dày nhẹ để các nét bên trong không mất sau khi resize 28x28.
+    if max(w, h) >= 80:
+        kernel = np.ones((2, 2), np.uint8)
+        thresh_crop = cv2.dilate(thresh_crop, kernel, iterations=1)
+        gray = np.maximum(gray, thresh_crop)
 
     scale = TARGET_BOX / max(w, h, 1)
     new_w = max(1, int(round(w * scale)))

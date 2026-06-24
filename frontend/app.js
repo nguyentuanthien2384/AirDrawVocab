@@ -54,6 +54,7 @@ const state = {
   pvpConnected: false,
   pvpEvents: [],
   retrainStatus: null,
+  proStatus: null,
   strokeModelAvailable: false,
   lastSavedKey: "",
   imageModelReloaded: false,
@@ -344,6 +345,16 @@ function renderGameShell() {
             </div>
             <div id="retrainBox" class="mini-list"><div class="mini-row"><span>Idle</span><small>Local/Colab pipeline</small></div></div>
           </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>Production AI Ops</h3><span class="badge">MLOps</span></div>
+            <div class="pvp-controls three">
+              <button id="buildBenchmarkBtn" class="secondary" type="button">Build benchmark</button>
+              <button id="evalReleaseBtn" class="secondary" type="button">Evaluate</button>
+              <button id="promoteDryRunBtn" class="secondary" type="button">Promote check</button>
+            </div>
+            <div id="proOpsBox" class="mini-list"><div class="mini-row"><span>Đang tải</span><small>benchmark / eval / promotion</small></div></div>
+          </section>
         </aside>
       </section>
     </main>
@@ -356,6 +367,7 @@ function renderGameShell() {
   renderLeaderboard();
   renderPvp();
   refreshRetrainStatus();
+  refreshProStatus();
 }
 
 function wireGameEvents() {
@@ -376,6 +388,9 @@ function wireGameEvents() {
   $("#exportDatasetBtn").addEventListener("click", exportDataset);
   $("#trainStrokeBtn").addEventListener("click", () => startRetrain("stroke"));
   $("#trainImageBtn").addEventListener("click", () => startRetrain("image"));
+  $("#buildBenchmarkBtn")?.addEventListener("click", buildBenchmark);
+  $("#evalReleaseBtn")?.addEventListener("click", evaluateRelease);
+  $("#promoteDryRunBtn")?.addEventListener("click", promoteDryRun);
   updateCameraToolUI();
 }
 
@@ -916,6 +931,7 @@ async function realtimePredict() {
     form.append("source", currentInputMode());
     form.append("stroke_count", String(countStrokePoints()));
     form.append("elapsed_ms", String(Date.now() - state.roundStartedAt));
+    form.append("strokes_json", JSON.stringify(getAllCurrentStrokes()));
     let data = await apiPostForm("/predict_godmode", form);
     const strokeData = await tryStrokePrediction();
     if (
@@ -930,9 +946,18 @@ async function realtimePredict() {
         top5: strokeData.top5,
         is_correct: strokeData.is_correct,
         ai_source: "stroke-sequence",
+        judge: {
+          ...(data.judge || {}),
+          predicted: strokeData.label,
+          correct: strokeData.is_correct,
+          clarity_score: Math.round(strokeData.confidence * 100),
+          feedback: strokeData.is_correct
+            ? "Stroke model nhận đúng theo chuỗi nét bạn vừa vẽ."
+            : `Stroke model đoán '${strokeData.label}'. Hãy lưu mẫu train để model học thêm kiểu vẽ của bạn.`,
+        },
       };
     } else {
-      data.ai_source = "image-cnn";
+      data.ai_source = data.ai_source || data.source || "image-cnn";
     }
     if (hasFaceStrokesInDrawing()) {
       data.ai_source = `${data.ai_source}+face-strokes`;
@@ -1252,9 +1277,16 @@ function updatePredictionPanel(data) {
   const faceRow = state.mode === "camera" && state.cameraTool === "face"
     ? `<div class="mini-row"><span>Face input</span><small>${escapeHtml(cameraFaceLabel())}</small></div>`
     : "";
+  const rerank = data.rerank || data.judge?.rerank || null;
+  const rerankRow = rerank?.used
+    ? `<div class="mini-row"><span>Tối ưu nhận diện</span><small>rerank hình học · CNN gốc: ${escapeHtml(rerank.raw_label || "?")} ${Math.round(Number(rerank.raw_confidence || 0) * 100)}%</small></div>`
+    : rerank?.target_shape_score
+      ? `<div class="mini-row"><span>Shape check</span><small>${Math.round(Number(rerank.target_shape_score || 0) * 100)}% · chưa đủ để sửa CNN</small></div>`
+      : "";
   const sourceRows = `
     <div class="mini-row"><span>AI source</span><small>${escapeHtml(source)}</small></div>
     ${faceRow}
+    ${rerankRow}
     <div class="mini-row"><span>${match ? "Đúng mục tiêu" : "Đang lệch mục tiêu"}</span><small>${Math.round(conf * 100)}% / cần ${Math.round(threshold * 100)}%</small></div>
     <div class="mini-row"><span>Auto pass</span><small>${state.consecutiveCorrect || 0}/2 lần đúng liên tiếp</small></div>
   `;
@@ -1586,6 +1618,77 @@ async function refreshRetrainStatus() {
     if (data.process_running) setTimeout(refreshRetrainStatus, 2500);
   } catch (err) {
     box.innerHTML = `<div class="mini-row"><span>Status lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+
+async function refreshProStatus() {
+  const box = $("#proOpsBox");
+  if (!box) return;
+  try {
+    const data = await apiGet("/admin/pro/status");
+    state.proStatus = data;
+    const bm = data.benchmark || {};
+    const ev = data.latest_eval || {};
+    const ready = data.training_readiness || {};
+    const cal = data.calibration || {};
+    const promo = (data.promotion_tail || [])[data.promotion_tail?.length - 1] || null;
+    const bmText = bm.num_samples
+      ? `${bm.num_samples} mẫu · ${bm.num_classes} lớp · min/class ${bm.min_samples_per_class || 0}`
+      : "chưa build";
+    const evalText = ev.samples
+      ? `top1 ${Math.round((ev.top1_accuracy || 0) * 100)}% · F1 ${Math.round((ev.macro_f1 || 0) * 100)}% · ECE ${Math.round((ev.ece_10_bins || 0) * 100)}%`
+      : "chưa evaluate";
+    const calText = cal.temperature
+      ? `T=${Number(cal.temperature).toFixed(2)} · ECE ${Math.round((cal.ece_after || 0) * 100)}%`
+      : "chưa calibration";
+    box.innerHTML = `
+      <div class="mini-row"><span>Benchmark</span><small>${escapeHtml(bmText)}</small></div>
+      <div class="mini-row"><span>Eval release</span><small>${escapeHtml(evalText)}</small></div>
+      <div class="mini-row"><span>Calibration</span><small>${escapeHtml(calText)}</small></div>
+      <div class="mini-row"><span>Readiness</span><small>${ready.ready_stroke ? "stroke ready" : "cần thêm stroke"} · ${ready.ready_image ? "image ready" : "cần dữ liệu image"}</small></div>
+      <div class="mini-row"><span>Promotion</span><small>${promo ? (promo.approved ? "approved" : "rejected/check") : "chưa chạy"}</small></div>
+    `;
+  } catch (err) {
+    box.innerHTML = `<div class="mini-row column"><span>Production status lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function buildBenchmark() {
+  const box = $("#proOpsBox");
+  if (box) box.innerHTML = `<div class="mini-row"><span>Đang build benchmark</span><small>đọc stroke_samples...</small></div>`;
+  try {
+    const data = await apiPostForm("/admin/benchmark/build", new FormData());
+    const m = data.manifest || {};
+    if (box) box.innerHTML = `<div class="mini-row"><span>Benchmark OK</span><small>${m.num_samples || 0} mẫu · ${m.num_classes || 0} lớp</small></div>`;
+    await refreshProStatus();
+  } catch (err) {
+    if (box) box.innerHTML = `<div class="mini-row column"><span>Build lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function evaluateRelease() {
+  const box = $("#proOpsBox");
+  if (box) box.innerHTML = `<div class="mini-row"><span>Đang evaluate</span><small>có thể mất vài phút nếu model lớn</small></div>`;
+  try {
+    const data = await apiPostForm("/admin/evaluate/run", new FormData());
+    const s = data.summary || {};
+    if (box) box.innerHTML = `<div class="mini-row"><span>Evaluate OK</span><small>top1 ${Math.round((s.top1_accuracy || 0) * 100)}% · ${s.samples || 0} mẫu</small></div>`;
+    await refreshProStatus();
+  } catch (err) {
+    if (box) box.innerHTML = `<div class="mini-row column"><span>Evaluate lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function promoteDryRun() {
+  const box = $("#proOpsBox");
+  if (box) box.innerHTML = `<div class="mini-row"><span>Đang check promote</span><small>không thay model thật</small></div>`;
+  try {
+    const data = await apiPostForm("/admin/promote/dry-run", new FormData());
+    if (box) box.innerHTML = `<div class="mini-row column"><span>Promote dry-run</span><small>${data.ok ? "Có thể promote theo gate prototype" : "Chưa đạt gate"}</small></div>`;
+    await refreshProStatus();
+  } catch (err) {
+    if (box) box.innerHTML = `<div class="mini-row column"><span>Promote lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
   }
 }
 
@@ -2153,8 +2256,12 @@ function drawGuide(label) {
       rect(0.3, 0.25, 0.4, 0.5);
       break;
     case "book":
+      // Gợi ý rõ hơn cho model: bìa chữ nhật + gáy giữa + 3 dòng trang bên trái.
       rect(0.25, 0.25, 0.5, 0.5);
       line(0.5, 0.25, 0.5, 0.75);
+      line(0.32, 0.38, 0.46, 0.38);
+      line(0.32, 0.48, 0.46, 0.48);
+      line(0.32, 0.58, 0.46, 0.58);
       break;
     case "dog":
       circle(0.5, 0.52, 0.22);

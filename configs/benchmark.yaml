@@ -1,0 +1,18 @@
+# Benchmark chính thức cho AirDrawVocab.
+# Mục tiêu: mọi model candidate phải được so sánh trên cùng split cố định.
+benchmark_name: release_v1
+seed: 42
+min_points: 4
+splits:
+  train_ratio: 0.70
+  calibration_ratio: 0.15
+  test_ratio: 0.15
+holdout:
+  group_by_user: true
+  group_by_session: true
+quality:
+  reject_blank: true
+  reject_wrong_target_if_marked: false
+outputs:
+  root: data/benchmark/release_v1
+  manifest: data/benchmark/release_v1/manifest.json

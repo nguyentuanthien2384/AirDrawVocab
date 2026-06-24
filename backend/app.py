@@ -1504,17 +1504,39 @@ def foza_chatbot_reply(label: str, confidence: float, top3: List[dict]) -> str:
         return fallback_chatbot_reply(label, confidence, top3)
 
 
+def _deterministic_tta_batches(x: np.ndarray, max_augments: int) -> List[np.ndarray]:
+    """Sinh các biến thể dịch nhẹ CỐ ĐỊNH để dự đoán realtime ổn định hơn.
+
+    Bản cũ dùng random_crop nên cùng một nét vẽ có thể nhảy nhãn giữa các tick.
+    Với game realtime, độ ổn định quan trọng hơn augmentation ngẫu nhiên.
+    """
+    if max_augments <= 0:
+        return []
+    try:
+        image = np.asarray(x[0, :, :, 0], dtype="float32")
+    except Exception:
+        return []
+    shifts = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
+    batches: List[np.ndarray] = []
+    for dx, dy in shifts[:max_augments]:
+        matrix = np.float32([[1, 0, dx], [0, 1, dy]])
+        shifted = cv2.warpAffine(image, matrix, (28, 28), flags=cv2.INTER_LINEAR, borderValue=0)
+        batches.append(shifted.reshape(1, 28, 28, 1).astype("float32"))
+    return batches
+
+
 def predict_proba(active_model, x: np.ndarray) -> np.ndarray:
-    """Dự đoán xác suất; nếu bật TTA thì trung bình trên ảnh gốc + vài bản dịch nhẹ."""
+    """Dự đoán xác suất với TTA ổn định, không dùng random crop.
+
+    Mục tiêu: giảm việc AI nhảy từ `book` sang `pants/door` chỉ vì một lần crop
+    ngẫu nhiên làm mất các nét trang sách nhỏ.
+    """
     base = active_model.predict(x, verbose=0)[0]
     if not USE_TTA or TTA_SHIFTS <= 0:
         return base
-    pad = 3
     probs = [base]
-    for _ in range(TTA_SHIFTS):
-        xs = tf.image.random_crop(
-            tf.pad(x, [[0, 0], [pad, pad], [pad, pad], [0, 0]]), tf.shape(x))
-        probs.append(active_model.predict(xs.numpy(), verbose=0)[0])
+    for xs in _deterministic_tta_batches(x, TTA_SHIFTS):
+        probs.append(active_model.predict(xs, verbose=0)[0])
     return np.mean(probs, axis=0)
 
 
@@ -1575,6 +1597,307 @@ async def predict(request: Request, file: UploadFile = File(...), source: str = 
 
 
 
+
+# -----------------------------
+# Hybrid visual reranker for gameplay
+# -----------------------------
+# CNN QuickDraw rất dễ nhầm các lớp có hình hộp/đường dọc giống nhau: book,
+# door, pants, square, envelope. Trong game ta biết từ mục tiêu, nên backend có
+# thể dùng thêm đặc trưng hình học đơn giản để kiểm tra "bản vẽ có giống mục tiêu
+# không" thay vì chỉ lấy top-1 CNN. Đây KHÔNG thay thế model; nó chỉ rerank khi
+# hình học của target đủ rõ.
+SHAPE_RERANK_ENABLED = os.getenv("SHAPE_RERANK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+SHAPE_RERANK_MIN_SCORE = float(os.getenv("SHAPE_RERANK_MIN_SCORE", "0.64"))
+SHAPE_RERANK_STRENGTH = float(os.getenv("SHAPE_RERANK_STRENGTH", "0.78"))
+
+
+def _clamp01(value: float) -> float:
+    return float(max(0.0, min(1.0, value)))
+
+
+def _score_between(value: float, best: float, spread: float) -> float:
+    if spread <= 0:
+        return 0.0
+    return _clamp01(1.0 - abs(float(value) - best) / spread)
+
+
+def _drawing_binary_mask(image_bytes: bytes, size: int = 96) -> Tuple[Optional[np.ndarray], dict]:
+    """Canvas bytes -> binary mask đã crop/resize để đo đặc trưng hình học."""
+    try:
+        image = Image.open(BytesIO(image_bytes)).convert("RGBA")
+    except Exception:
+        return None, {"error": "invalid_image"}
+
+    rgba = np.array(image)
+    rgb = rgba[:, :, :3].astype(np.uint8)
+    alpha = rgba[:, :, 3:4].astype(np.float32) / 255.0
+    white = np.full_like(rgb, 255, dtype=np.uint8)
+    rgb = (rgb.astype(np.float32) * alpha + white.astype(np.float32) * (1 - alpha)).astype(np.uint8)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    if float(gray.mean()) > 127:
+        gray = 255 - gray
+
+    _, rough = cv2.threshold(gray, 12, 255, cv2.THRESH_BINARY)
+    coords = cv2.findNonZero(rough)
+    if coords is None:
+        return None, {"empty": True}
+
+    x, y, w, h = cv2.boundingRect(coords)
+    pad = int(max(w, h) * 0.08) + 4
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(gray.shape[1], x + w + pad)
+    y2 = min(gray.shape[0], y + h + pad)
+    crop = gray[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None, {"empty": True}
+
+    # Otsu + close/dilate nhẹ để giữ các nét trong khi resize.
+    _, mask = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = np.ones((2, 2), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    if max(w, h) > 80:
+        mask = cv2.dilate(mask, kernel, iterations=1)
+
+    side = max(mask.shape[:2])
+    square = np.zeros((side, side), dtype=np.uint8)
+    oy = (side - mask.shape[0]) // 2
+    ox = (side - mask.shape[1]) // 2
+    square[oy:oy + mask.shape[0], ox:ox + mask.shape[1]] = mask
+    resized = cv2.resize(square, (size, size), interpolation=cv2.INTER_NEAREST)
+    return resized, {
+        "bbox": {"x": int(x), "y": int(y), "width": int(w), "height": int(h)},
+        "aspect": round(float(w) / max(1.0, float(h)), 4),
+        "ink_ratio": round(float(np.count_nonzero(resized)) / float(size * size), 4),
+    }
+
+
+def _line_component_features(mask: np.ndarray) -> dict:
+    """Đếm các nét dọc/ngang/chéo chính trong mask 96x96."""
+    if mask is None or mask.size == 0:
+        return {}
+    h, w = mask.shape[:2]
+    binary = (mask > 0).astype(np.uint8) * 255
+
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(7, h // 9)))
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(7, w // 9), 1))
+    vertical = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
+    horizontal = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
+
+    def comp_boxes(img: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes = []
+        for contour in contours:
+            x, y, bw, bh = cv2.boundingRect(contour)
+            if bw * bh >= 8:
+                boxes.append((int(x), int(y), int(bw), int(bh)))
+        return boxes
+
+    v_boxes = comp_boxes(vertical)
+    h_boxes = comp_boxes(horizontal)
+    strong_v = [b for b in v_boxes if b[3] >= h * 0.34]
+    strong_h = [b for b in h_boxes if b[2] >= w * 0.12]
+    inner_h = [b for b in strong_h if h * 0.18 <= b[1] <= h * 0.82]
+    left_inner_h = [b for b in inner_h if (b[0] + b[2] / 2) <= w * 0.62]
+    center_v_scores = []
+    for x, y, bw, bh in strong_v:
+        center = (x + bw / 2) / max(1, w)
+        center_v_scores.append(_score_between(center, 0.5, 0.18) * _clamp01(bh / max(1, h * 0.55)))
+    center_vertical = max(center_v_scores) if center_v_scores else 0.0
+
+    # Hough để nhận các nét chéo: envelope/lightning/star.
+    edges = cv2.Canny(binary, 50, 150)
+    raw_lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=16, minLineLength=max(10, w // 6), maxLineGap=5)
+    diag_count = 0
+    if raw_lines is not None:
+        for line in raw_lines[:, 0, :]:
+            x1, y1, x2, y2 = [int(v) for v in line]
+            dx = abs(x2 - x1)
+            dy = abs(y2 - y1)
+            if dx >= w * 0.12 and dy >= h * 0.12:
+                diag_count += 1
+
+    bottom = binary[int(h * 0.58):, :]
+    col = (bottom > 0).sum(axis=0)
+    active = col > max(2, bottom.shape[0] * 0.10)
+    clusters = []
+    start = None
+    for i, val in enumerate(active.tolist() + [False]):
+        if val and start is None:
+            start = i
+        elif not val and start is not None:
+            if i - start >= max(3, w // 18):
+                clusters.append((start, i - 1))
+            start = None
+    lower_two_clusters = len(clusters) >= 2
+    central_gap = 0.0
+    if lower_two_clusters:
+        for a, b in zip(clusters, clusters[1:]):
+            gap_mid = (a[1] + b[0]) / 2 / max(1, w)
+            gap_w = (b[0] - a[1]) / max(1, w)
+            central_gap = max(central_gap, _score_between(gap_mid, 0.5, 0.18) * _clamp01(gap_w / 0.16))
+
+    return {
+        "vertical_count": len(strong_v),
+        "horizontal_count": len(strong_h),
+        "inner_horizontal_count": len(inner_h),
+        "left_inner_horizontal_count": len(left_inner_h),
+        "center_vertical": round(float(center_vertical), 4),
+        "diagonal_count": int(diag_count),
+        "bottom_clusters": int(len(clusters)),
+        "central_bottom_gap": round(float(central_gap), 4),
+        "vertical_boxes": strong_v[:8],
+        "horizontal_boxes": strong_h[:8],
+    }
+
+
+def _shape_scores_for_mask(mask: np.ndarray, meta: dict) -> dict:
+    if mask is None:
+        return {}
+    lines = _line_component_features(mask)
+    aspect = float(meta.get("aspect") or 1.0)
+    ink_ratio = float(meta.get("ink_ratio") or 0.0)
+    aspect_square = _score_between(aspect, 1.0, 0.55)
+    aspect_book = _score_between(aspect, 0.78, 0.70)
+    aspect_tall = _clamp01((1.0 / max(0.25, aspect) - 0.9) / 0.65)
+    page_lines = _clamp01(lines.get("left_inner_horizontal_count", 0) / 3.0)
+    center_spine = float(lines.get("center_vertical") or 0.0)
+    horizontal = _clamp01(lines.get("horizontal_count", 0) / 4.0)
+    diagonals = _clamp01(lines.get("diagonal_count", 0) / 4.0)
+    leg_gap = float(lines.get("central_bottom_gap") or 0.0)
+
+    book = _clamp01(0.38 * center_spine + 0.34 * page_lines + 0.18 * aspect_book + 0.10 * _score_between(ink_ratio, 0.16, 0.16))
+    # Nếu có nhiều trang sách bên trái thì giảm nhầm sang door/pants.
+    door = _clamp01(0.42 * aspect_tall + 0.30 * center_spine + 0.16 * horizontal + 0.12 * _score_between(ink_ratio, 0.18, 0.16) - 0.24 * page_lines)
+    pants = _clamp01(0.44 * leg_gap + 0.30 * aspect_tall + 0.18 * _clamp01(lines.get("vertical_count", 0) / 4.0) - 0.30 * page_lines)
+    square = _clamp01(0.62 * aspect_square + 0.20 * _score_between(ink_ratio, 0.12, 0.12) - 0.20 * (page_lines + center_spine) / 2)
+    envelope = _clamp01(0.45 * aspect_square + 0.35 * diagonals + 0.15 * horizontal)
+    lightning = _clamp01(0.68 * diagonals + 0.18 * _score_between(ink_ratio, 0.10, 0.12) + 0.14 * (1 - aspect_square))
+
+    return {
+        "book": round(book, 4),
+        "door": round(door, 4),
+        "pants": round(pants, 4),
+        "square": round(square, 4),
+        "envelope": round(envelope, 4),
+        "lightning": round(lightning, 4),
+        "features": {**meta, **{k: v for k, v in lines.items() if not k.endswith("boxes")}},
+    }
+
+
+def _target_rank(preds: np.ndarray, target: str) -> Tuple[int, float]:
+    if not target or target not in categories:
+        return 999, 0.0
+    usable_count = min(len(preds), len(categories))
+    usable_preds = preds[:usable_count]
+    target_index = categories.index(target)
+    order = usable_preds.argsort()[::-1].tolist()
+    rank = order.index(target_index) + 1 if target_index in order else 999
+    return int(rank), float(usable_preds[target_index])
+
+
+def _topn_from_score_map(score_map: Dict[str, float], n: int = 5) -> List[dict]:
+    rows = []
+    for label, score in sorted(score_map.items(), key=lambda kv: kv[1], reverse=True)[:n]:
+        rows.append({
+            "label": label,
+            "meaning_vi": VI_MEANINGS.get(label, label),
+            "confidence": float(score),
+            "confidence_percent": round(float(score) * 100, 2),
+        })
+    return rows
+
+
+def _rerank_game_prediction(preds: np.ndarray, image_bytes: bytes, target: str) -> dict:
+    """Kết hợp CNN + đặc trưng hình học mục tiêu cho /predict_godmode."""
+    top5_raw = _topn_from_predictions(preds, 5)
+    usable_count = min(len(preds), len(categories))
+    if usable_count <= 0:
+        return {"label": "", "confidence": 0.0, "top5": [], "top5_raw": top5_raw, "rerank": {"used": False}}
+
+    raw_idx = int(np.argmax(preds[:usable_count]))
+    raw_label = categories[raw_idx]
+    raw_conf = float(preds[raw_idx])
+    target_label = (target or "").strip().lower()
+
+    if not SHAPE_RERANK_ENABLED or not target_label or target_label not in categories:
+        return {
+            "label": raw_label,
+            "confidence": raw_conf,
+            "top5": top5_raw,
+            "top5_raw": top5_raw,
+            "rerank": {"used": False, "reason": "disabled_or_no_target"},
+        }
+
+    mask, meta = _drawing_binary_mask(image_bytes)
+    shape_scores = _shape_scores_for_mask(mask, meta) if mask is not None else {}
+    target_shape = float(shape_scores.get(target_label, 0.0) or 0.0)
+    target_rank, target_cnn = _target_rank(preds, target_label)
+
+    score_map: Dict[str, float] = {categories[i]: float(preds[i]) for i in range(usable_count)}
+    used = False
+    reason = "cnn_only"
+
+    # Điều kiện an toàn: chỉ nâng target khi hình học đủ rõ, và target đã có tín
+    # hiệu trong CNN hoặc nằm trong nhóm hình học đang hỗ trợ. Như vậy game không
+    # tự cho qua nếu người chơi chưa vẽ gì giống mục tiêu.
+    supported_target = target_label in {"book", "door", "pants", "square", "envelope", "lightning"}
+    if supported_target and target_shape >= SHAPE_RERANK_MIN_SCORE:
+        pseudo_conf = min(0.93, max(target_cnn, 0.32 + SHAPE_RERANK_STRENGTH * target_shape))
+        if pseudo_conf > score_map.get(target_label, 0.0):
+            score_map[target_label] = pseudo_conf
+            used = True
+            reason = f"shape_match_{target_label}_{round(target_shape * 100)}pct"
+
+        # Giảm nhẹ các lớp dễ nhầm khi target có chi tiết riêng rõ.
+        if target_label == "book" and target_shape >= SHAPE_RERANK_MIN_SCORE:
+            page_lines = float(shape_scores.get("features", {}).get("left_inner_horizontal_count") or 0)
+            if page_lines >= 2:
+                for confuse in ("door", "pants", "square"):
+                    if confuse in score_map:
+                        score_map[confuse] = float(score_map[confuse]) * 0.72
+        elif target_label == "pants" and target_shape >= SHAPE_RERANK_MIN_SCORE:
+            for confuse in ("book", "door", "square"):
+                if confuse in score_map:
+                    score_map[confuse] = float(score_map[confuse]) * 0.80
+
+    top5 = _topn_from_score_map(score_map, 5)
+    best = top5[0] if top5 else {"label": raw_label, "confidence": raw_conf}
+    return {
+        "label": best["label"],
+        "confidence": float(best["confidence"]),
+        "top5": top5,
+        "top5_raw": top5_raw,
+        "rerank": {
+            "used": bool(used),
+            "reason": reason,
+            "target_shape_score": round(target_shape, 4),
+            "target_cnn_confidence": round(float(target_cnn), 4),
+            "target_cnn_rank": int(target_rank),
+            "raw_label": raw_label,
+            "raw_confidence": round(raw_conf, 4),
+            "shape_scores": {k: v for k, v in shape_scores.items() if k != "features"},
+            "features": shape_scores.get("features", {}),
+        },
+    }
+
+
+def _enhanced_teacher_feedback(target: str, predicted: str, confidence: float, correct: bool, stroke_count: int, rerank: Optional[dict] = None) -> str:
+    base = _teacher_feedback(target, predicted, confidence, correct, stroke_count)
+    if not rerank:
+        return base
+    if rerank.get("used") and correct:
+        raw_label = rerank.get("raw_label")
+        raw_conf = float(rerank.get("raw_confidence") or 0)
+        return (
+            f"Đã dùng thêm kiểm tra hình học mục tiêu để giảm nhầm với '{raw_label}' "
+            f"(CNN gốc {round(raw_conf * 100)}%). {base}"
+        )
+    if target == "book" and not correct:
+        return base + " Với 'book', hãy vẽ bìa chữ nhật, gáy sách ở giữa và 2-3 đường trang nằm trong nửa trái."
+    return base
+
+
 def _topn_from_predictions(preds: np.ndarray, n: int = 5) -> List[dict]:
     usable_count = min(len(preds), len(categories))
     if usable_count <= 0:
@@ -1604,13 +1927,24 @@ def _teacher_feedback(target: str, predicted: str, confidence: float, correct: b
     return "AI chưa chắc chắn. Hãy vẽ nét lớn, ít rối, ưu tiên hình dạng tổng thể thay vì chi tiết nhỏ."
 
 
-def _judge_payload(target: str, predicted: str, confidence: float, correct: bool, stroke_count: int, elapsed_ms: int) -> dict:
+def _judge_payload(
+    target: str,
+    predicted: str,
+    confidence: float,
+    correct: bool,
+    stroke_count: int,
+    elapsed_ms: int,
+    rerank: Optional[dict] = None,
+) -> dict:
     clarity = min(100, max(5, round(confidence * 100)))
     stroke_score = min(100, 35 + stroke_count * 7)
     speed_score = 100 if elapsed_ms <= 12000 else max(30, 100 - int((elapsed_ms - 12000) / 500))
-    shape_score = round((clarity * 0.6) + (stroke_score * 0.25) + (speed_score * 0.15))
+    shape_bonus = 0
+    if rerank and rerank.get("target_shape_score") is not None:
+        shape_bonus = int(max(0, float(rerank.get("target_shape_score") or 0) - 0.55) * 22)
+    shape_score = min(100, round((clarity * 0.56) + (stroke_score * 0.24) + (speed_score * 0.14) + shape_bonus))
     if correct:
-        grade = "S" if shape_score >= 85 else "A" if shape_score >= 70 else "B"
+        grade = "S" if shape_score >= 88 else "A" if shape_score >= 72 else "B"
     else:
         grade = "C" if confidence >= 0.45 else "D"
     return {
@@ -1622,7 +1956,8 @@ def _judge_payload(target: str, predicted: str, confidence: float, correct: bool
         "stroke_score": stroke_score,
         "speed_score": speed_score,
         "grade": grade,
-        "feedback": _teacher_feedback(target, predicted, confidence, correct, stroke_count),
+        "feedback": _enhanced_teacher_feedback(target, predicted, confidence, correct, stroke_count, rerank),
+        "rerank": rerank or {"used": False},
     }
 
 
@@ -1647,14 +1982,24 @@ async def predict_godmode(
     usable_count = min(len(preds), len(categories))
     if usable_count <= 0:
         raise HTTPException(status_code=500, detail="Model chưa có nhãn nhận diện hợp lệ.")
-    usable_preds = preds[:usable_count]
-    best_index = int(np.argmax(usable_preds))
-    label = categories[best_index]
-    confidence = float(usable_preds[best_index])
+
     target_label = target.strip().lower()
+    reranked = _rerank_game_prediction(preds, image_bytes, target_label)
+    label = reranked["label"]
+    confidence = float(reranked["confidence"])
     correct = bool(target_label and label == target_label)
-    top5 = _topn_from_predictions(preds, 5)
-    judge = _judge_payload(target_label, label, confidence, correct, max(0, int(stroke_count)), max(0, int(elapsed_ms)))
+    top5 = reranked["top5"]
+    rerank_info = reranked.get("rerank", {"used": False})
+    judge = _judge_payload(
+        target_label,
+        label,
+        confidence,
+        correct,
+        max(0, int(stroke_count)),
+        max(0, int(elapsed_ms)),
+        rerank_info,
+    )
+    ai_source = "image-cnn+shape-rerank" if rerank_info.get("used") else "image-cnn"
     return {
         "ok": True,
         "label": label,
@@ -1662,9 +2007,14 @@ async def predict_godmode(
         "confidence": confidence,
         "confidence_percent": round(confidence * 100, 2),
         "top5": top5,
+        "top5_raw": reranked.get("top5_raw", top5),
         "target": target_label,
         "is_correct": correct,
         "judge": judge,
+        "ai_source": ai_source,
+        "rerank": rerank_info,
+        "raw_label": rerank_info.get("raw_label", label),
+        "raw_confidence": rerank_info.get("raw_confidence", confidence),
     }
 
 
@@ -2065,11 +2415,13 @@ def retrain_start(request: Request, mode: str = Form("stroke"), epochs: int = Fo
     with retrain_lock:
         if retrain_process and retrain_process.poll() is None:
             return {"ok": False, "message": "Đang có job retrain chạy.", "status": _read_retrain_status()}
-        script = "train_stroke_model.py" if mode == "stroke" else "self_improve_retrain.py"
+        script = "train_stroke_model.py" if mode == "stroke" else "train_image_model.py"
         log_path = ROOT / "data" / f"retrain_{mode}.log"
         safe_epochs = max(1, min(int(epochs), 50))
         _write_retrain_status("running", f"Đang chạy {script}", {"mode": mode, "log": str(log_path), "started_by": user["username"], "readiness": readiness})
         cmd = [sys.executable, "-X", "utf8", str(ROOT / "src" / "training" / script), "--epochs", str(safe_epochs)]
+        if mode == "image":
+            cmd.extend(["--config", str(ROOT / "configs" / "image_resnet_sketch.yaml")])
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -2292,3 +2644,158 @@ async def face_verify(username: str = Form(""), file: UploadFile = File(...)):
         "score": result.score,
         "threshold": result.threshold,
     }
+
+
+# -----------------------------
+# Production AI Ops endpoints
+# -----------------------------
+def _read_json_file_safe(path: Path, fallback: Any = None) -> Any:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return fallback
+
+
+def _run_project_script(args: List[str], timeout: int = 900) -> dict:
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    cmd = [sys.executable, "-X", "utf8", *args]
+    started = datetime.now().isoformat(timespec="seconds")
+    proc = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=timeout,
+        env=env,
+    )
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "command": " ".join(cmd),
+        "started_at": started,
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "stdout_tail": (proc.stdout or "")[-8000:],
+        "stderr_tail": (proc.stderr or "")[-8000:],
+    }
+
+
+def _latest_release_summary() -> dict:
+    releases = ROOT / "assets" / "reports" / "releases"
+    if not releases.exists():
+        return {}
+    candidates = sorted(releases.glob("*/summary.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return _read_json_file_safe(candidates[0], {}) if candidates else {}
+
+
+def _promotion_tail(limit: int = 6) -> List[dict]:
+    path = MODELS_DIR / "promotion_log.jsonl"
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]:
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            pass
+    return out
+
+
+@app.get("/admin/pro/status")
+def admin_pro_status(request: Request):
+    """Tổng quan production AI: benchmark, runtime, registry, promotion, readiness."""
+    user = user_from_request(request)
+    readiness = _training_readiness(user["id"] if user else None)
+    benchmark_manifest = _read_json_file_safe(ROOT / "data" / "benchmark" / "release_v1" / "manifest.json", {})
+    registry = _read_json_file_safe(MODELS_DIR / "registry.json", {})
+    calibration = _read_json_file_safe(MODELS_DIR / "calibration" / "image_temperature.json", {})
+    return {
+        "ok": True,
+        "user": user["username"] if user else "guest",
+        "runtime": _runtime_model_info(),
+        "training_readiness": readiness,
+        "benchmark": benchmark_manifest,
+        "latest_eval": _latest_release_summary(),
+        "registry": {"updated_at": registry.get("updated_at"), "count": registry.get("count", 0)},
+        "calibration": calibration,
+        "promotion_tail": _promotion_tail(),
+        "paths": {
+            "benchmark": "data/benchmark/release_v1",
+            "eval_report": "assets/reports/releases/current/summary.json",
+            "promotion_log": "models/promotion_log.jsonl",
+        },
+    }
+
+
+@app.post("/admin/benchmark/build")
+def admin_benchmark_build(request: Request):
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để build benchmark.")
+    result = _run_project_script([
+        "src/data/make_real_user_benchmark.py",
+        "--db", str(APP_DB_PATH),
+        "--out", str(ROOT / "data" / "benchmark" / "release_v1"),
+    ], timeout=300)
+    result["manifest"] = _read_json_file_safe(ROOT / "data" / "benchmark" / "release_v1" / "manifest.json", {})
+    return result
+
+
+@app.post("/admin/evaluate/run")
+def admin_evaluate_run(request: Request):
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để evaluate model.")
+    benchmark_dir = ROOT / "data" / "benchmark" / "release_v1"
+    if not (benchmark_dir / "test.jsonl").exists():
+        raise HTTPException(status_code=400, detail="Chưa có benchmark. Bấm Build benchmark trước.")
+    result = _run_project_script([
+        "src/evaluation/evaluate_release.py",
+        "--benchmark", str(benchmark_dir),
+        "--out", str(ROOT / "assets" / "reports" / "releases" / "current"),
+    ], timeout=900)
+    result["summary"] = _read_json_file_safe(ROOT / "assets" / "reports" / "releases" / "current" / "summary.json", {})
+    return result
+
+
+@app.get("/admin/promote/status")
+def admin_promote_status(request: Request):
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để xem promotion status.")
+    return {
+        "ok": True,
+        "promotion_tail": _promotion_tail(),
+        "latest_eval": _latest_release_summary(),
+        "candidate_exists": (MODELS_DIR / "image_cnn_candidate.keras").exists(),
+        "candidate_categories_exists": (MODELS_DIR / "categories_candidate.json").exists(),
+    }
+
+
+@app.post("/admin/promote/dry-run")
+def admin_promote_dry_run(request: Request):
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để kiểm tra promotion.")
+    result = _run_project_script([
+        "src/training/promote_candidate.py",
+        "--report", str(ROOT / "assets" / "reports" / "releases" / "current" / "summary.json"),
+        "--dry-run",
+        "--allow-if-weak-data",
+    ], timeout=120)
+    return result
+
+
+@app.get("/metrics")
+def metrics_endpoint():
+    try:
+        from src.monitoring.metrics import render_metrics
+        body, content_type = render_metrics()
+        return Response(content=body, media_type=content_type)
+    except Exception as exc:
+        return Response(content=f"airdraw_metrics_error 1\n# {exc}\n", media_type="text/plain")

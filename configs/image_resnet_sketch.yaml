@@ -1,0 +1,21 @@
+model:
+  name: resnet_sketch
+  input_size: 64
+  pretrained: false
+  dropout: 0.30
+training:
+  seed: 42
+  epochs: 25
+  batch_size: 64
+  learning_rate: 0.001
+  validation_ratio: 0.15
+  quickdraw_limit_per_class: 1000
+  use_user_data: true
+  use_quickdraw: true
+augmentation:
+  rotation: 0.08
+  translation: 0.08
+  zoom: 0.12
+release:
+  min_accuracy: 0.72
+  min_macro_f1: 0.68

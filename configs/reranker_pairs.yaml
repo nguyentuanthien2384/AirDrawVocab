@@ -1,0 +1,18 @@
+# Các cặp hay nhầm. Reranker chỉ được can thiệp nếu confidence chưa quá chắc
+# và đặc trưng hình học ủng hộ target.
+pairs:
+  - target: book
+    confuses_with: [door, pants, square, envelope]
+    cues: [book_spine, page_lines, cover_rectangle]
+  - target: door
+    confuses_with: [book, square, pants]
+    cues: [door_knob, vertical_panel, no_page_lines]
+  - target: pants
+    confuses_with: [door, book]
+    cues: [two_legs, crotch_gap, waistband]
+  - target: envelope
+    confuses_with: [square, book]
+    cues: [diagonal_flap, rectangular_border]
+thresholds:
+  target_shape_min: 0.58
+  max_cnn_conf_for_override: 0.72

@@ -1,21 +1,4 @@
-"""
-airdraw_models.py — "Model zoo" hiện đại cho AirDrawVocab (sketch 28x28, số lớp theo config.NUM_CLASSES).
 
-Thiết kế để VƯỢT cnn_clean (~95.3%) mà vẫn deploy được trên web/desktop hiện tại
-(giữ nguyên input 28x28x1, output softmax theo config.NUM_CLASSES, thứ tự nhãn = config.CATEGORIES).
-
-Điểm khác biệt so với bản cũ:
-  - GroupNormalization / LayerNormalization thay BatchNorm => ổn định ở inference
-    trên TF2.21/Keras3 (tránh đúng lỗi val/inference ~ngẫu nhiên đã gặp).
-  - Residual (ResNet) và ConvNeXt block (depthwise 7x7 + pointwise expand) =>
-    kiến trúc hiện đại, sâu hơn nhưng không nghẽn gradient.
-  - Recipe: augmentation mạnh hơn + label smoothing + Cosine LR + warmup + AdamW.
-  - TTA (test-time augmentation) + ensemble => +0.5..1.5% gần như miễn phí.
-
-Dùng:
-    from airdraw_models import MODEL_BUILDERS, build_cnn_clean
-    model = MODEL_BUILDERS["resnet_gn"]()
-"""
 from __future__ import annotations
 
 import numpy as np

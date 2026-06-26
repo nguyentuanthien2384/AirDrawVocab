@@ -1,0 +1,169 @@
+{
+  "finished_at": "2026-06-25T14:00:09.538858+00:00",
+  "final_status": "done",
+  "returncode": 0,
+  "status_payload": {
+    "status": "done",
+    "message": "Stroke model trained and saved",
+    "mode": "stroke",
+    "samples": 89,
+    "classes": 18,
+    "model": "C:\\Users\\Admin\\Downloads\\AirDrawVocab\\models\\stroke_sequence_model.keras",
+    "process_running": false,
+    "returncode": 0
+  },
+  "training_readiness": {
+    "total_samples": 128,
+    "classes": 19,
+    "min_samples_per_class": 3,
+    "max_samples_per_class": 16,
+    "quickdraw_classes": 19,
+    "ready_stroke": true,
+    "ready_image": true,
+    "requirements": {
+      "min_classes": 2,
+      "min_samples_per_class": 3,
+      "min_total_samples": 12
+    },
+    "missing_for_stroke": {
+      "classes": 0,
+      "total_samples": 0,
+      "samples_per_class": 0
+    },
+    "label_summary": [
+      {
+        "target": "pants",
+        "samples": 16,
+        "correct_samples": 1,
+        "avg_confidence": 49.5,
+        "last_seen": "2026-06-23T06:35:43.211963+00:00"
+      },
+      {
+        "target": "leaf",
+        "samples": 9,
+        "correct_samples": 1,
+        "avg_confidence": 52.8,
+        "last_seen": "2026-06-23T06:33:29.443389+00:00"
+      },
+      {
+        "target": "lightning",
+        "samples": 9,
+        "correct_samples": 5,
+        "avg_confidence": 57.5,
+        "last_seen": "2026-06-23T06:34:04.253218+00:00"
+      },
+      {
+        "target": "fish",
+        "samples": 8,
+        "correct_samples": 5,
+        "avg_confidence": 62.2,
+        "last_seen": "2026-06-25T13:58:08.785487+00:00"
+      },
+      {
+        "target": "baseball",
+        "samples": 7,
+        "correct_samples": 7,
+        "avg_confidence": 89.0,
+        "last_seen": "2026-06-23T06:33:42.642283+00:00"
+      },
+      {
+        "target": "envelope",
+        "samples": 7,
+        "correct_samples": 6,
+        "avg_confidence": 85.5,
+        "last_seen": "2026-06-23T06:34:50.400491+00:00"
+      },
+      {
+        "target": "eye",
+        "samples": 7,
+        "correct_samples": 6,
+        "avg_confidence": 64.9,
+        "last_seen": "2026-06-23T06:34:12.597010+00:00"
+      },
+      {
+        "target": "t-shirt",
+        "samples": 7,
+        "correct_samples": 5,
+        "avg_confidence": 61.5,
+        "last_seen": "2026-06-23T06:34:22.791325+00:00"
+      },
+      {
+        "target": "apple",
+        "samples": 6,
+        "correct_samples": 5,
+        "avg_confidence": 96.6,
+        "last_seen": "2026-06-25T13:54:30.343689+00:00"
+      },
+      {
+        "target": "book",
+        "samples": 6,
+        "correct_samples": 0,
+        "avg_confidence": 44.3,
+        "last_seen": "2026-06-23T06:35:57.611760+00:00"
+      },
+      {
+        "target": "diamond",
+        "samples": 6,
+        "correct_samples": 4,
+        "avg_confidence": 66.5,
+        "last_seen": "2026-06-25T13:59:08.796038+00:00"
+      },
+      {
+        "target": "dog",
+        "samples": 6,
+        "correct_samples": 3,
+        "avg_confidence": 78.4,
+        "last_seen": "2026-06-23T06:35:06.629965+00:00"
+      },
+      {
+        "target": "door",
+        "samples": 6,
+        "correct_samples": 4,
+        "avg_confidence": 67.6,
+        "last_seen": "2026-06-23T06:34:29.994970+00:00"
+      },
+      {
+        "target": "scissors",
+        "samples": 6,
+        "correct_samples": 6,
+        "avg_confidence": 91.9,
+        "last_seen": "2026-06-23T06:33:49.251319+00:00"
+      },
+      {
+        "target": "bowtie",
+        "samples": 5,
+        "correct_samples": 5,
+        "avg_confidence": 96.9,
+        "last_seen": "2026-06-23T06:33:13.228433+00:00"
+      },
+      {
+        "target": "hat",
+        "samples": 5,
+        "correct_samples": 4,
+        "avg_confidence": 79.8,
+        "last_seen": "2026-06-25T13:55:49.830297+00:00"
+      },
+      {
+        "target": "moon",
+        "samples": 5,
+        "correct_samples": 3,
+        "avg_confidence": 68.2,
+        "last_seen": "2026-06-22T08:09:28.508548+00:00"
+      },
+      {
+        "target": "square",
+        "samples": 4,
+        "correct_samples": 4,
+        "avg_confidence": 88.0,
+        "last_seen": "2026-06-23T06:33:33.654973+00:00"
+      },
+      {
+        "target": "star",
+        "samples": 3,
+        "correct_samples": 3,
+        "avg_confidence": 93.4,
+        "last_seen": "2026-06-23T06:33:58.792037+00:00"
+      }
+    ]
+  }
+}

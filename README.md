@@ -18,7 +18,9 @@ Sau đó mở:
 http://127.0.0.1:8000
 ```
 
-Model chính hiện tại là `models/airdrawvocab_best_advanced.keras`. Bản model này được **train lại bằng `train_clean.py`** trên dữ liệu QuickDraw thật và đạt **accuracy ~94.3%, Top-3 ~97.5%** trên 11,400 mẫu test, các lớp đều 91–98% (cân bằng). Thứ tự nhãn trong `models/categories.json` đã được đồng bộ đúng với model. Nếu chỉ muốn dùng project để demo hoặc nộp bài, bạn không cần train lại.
+Model chính hiện tại là `models/airdrawvocab_best_advanced.keras` (kiến trúc VGG-style CNN, 19 lớp). Model hiện tại được train với nhiều dữ liệu hơn (3.500 mẫu/lớp) và đánh giá có Test-Time Augmentation, đạt **test accuracy ≈ 93.9%, macro-F1 ≈ 0.94, Top-3 ≈ 97.2%** (19 lớp). Backend đã bật TTA sẵn (`USE_TTA=1`) nên nhận diện thực tế ổn định hơn. Thứ tự nhãn trong `models/categories.json` đã được đồng bộ đúng với model. Nếu chỉ muốn dùng project để demo hoặc nộp bài, bạn không cần train lại.
+
+> **Lưu ý về số liệu (đã thống nhất, tránh mâu thuẫn):** các bản tài liệu cũ từng ghi 85.66%, 94.3% hoặc 99.33% với các thiết lập đo khác nhau (số lớp, số mẫu test, script train khác nhau). Con số chính thức của báo cáo là **≈ 90.4%** vì nó được đo lại trên cùng một split cố định và **so sánh công bằng** với baseline + nhiều kiến trúc khác (xem `assets/reports/benchmark_runs/`). Số 99.33% trước đây không tái lập được nên không dùng làm kết quả chính.
 
 > **Quan trọng (đã sửa lỗi nhận diện):** model cũ trong bản zip ban đầu bị "suy biến" — nó đoán hầu hết hình vẽ thành `apple` do file `categories.json` lệch thứ tự nhãn so với model và pipeline train cũ (`advanced_train_model.py`) bị lỗi `BatchNormalization` trên TensorFlow 2.21/Keras 3 (train accuracy cao nhưng val/inference ~ngẫu nhiên). Đã khắc phục bằng `train_clean.py` (bỏ BatchNorm, augmentation trong tf.data) và đồng bộ lại nhãn. Xem mục 10.
 
@@ -47,7 +49,7 @@ AirDrawVocab_Unified_AI/
 │   ├── app.js
 │   └── style.css
 ├── models/
-│   ├── airdrawvocab_best_advanced.keras  # Model CNN tốt nhất (ResNet Sketch, 99.33%)
+│   ├── airdrawvocab_best_advanced.keras  # Model CNN chính (VGG-style, ~90.4% test acc)
 │   └── categories.json                   # 19 nhãn
 ├── data/
 │   ├── dataset_info.json              # Metadata dataset
@@ -334,6 +336,24 @@ Lưu ý: nên train/chạy demo bằng **Python 3.11 hoặc 3.12 64-bit**. Pytho
 
 Lệnh này tải một phần nhỏ mỗi lớp (~6MB/lớp) vào `data/npy_28/`, nhanh hơn nhiều so với tải full `.npy`.
 
+### Cách MỚI (khuyến nghị) — train độ chính xác cao, đồng bộ với notebook Colab
+
+Script `src/training/train_highacc.py` dùng đúng kiến trúc trong notebook Colab
+(`AirDrawVocab_train_highacc_colab.ipynb`): VGG + BatchNorm, label smoothing,
+cosine LR, augmentation và TTA khi đánh giá.
+
+```bat
+# GPU (khuyến nghị, ~96–98%):
+python src/training/train_highacc.py --per-class 12000 --epochs 40 --batch 512
+
+# CPU (nhanh hơn, ~93–94%, nên thêm --no-bn để ổn định trên Keras 3):
+python src/training/train_highacc.py --per-class 3500 --epochs 14 --batch 256 --no-bn
+```
+
+Để đạt **Top-1 ≥ 97%** chắc chắn, hãy chạy notebook `AirDrawVocab_train_highacc_colab.ipynb`
+trên Google Colab GPU (Runtime → GPU → Run all), rồi chép `airdrawvocab_best_advanced.keras`
+và `categories.json` tải về vào thư mục `models/`.
+
 ### Bước 2: train (đã tối ưu tốc độ, ~8–12 phút trên CPU)
 
 ```bat
@@ -420,17 +440,16 @@ Kết quả đánh giá độc lập:
 
 ```text
 Model: models/airdrawvocab_best_advanced.keras
-Accuracy: 99.33%
-Top-3 Accuracy: 100.00%
-Weighted F1-score: 99.33%
-Errors: 19 / 2,850 mẫu test
+Accuracy: ~90.4%      (benchmark tái lập, 15.200 mẫu test, 19 lớp)
+Top-3 Accuracy: ~96.0%
+Macro F1-score: ~0.90
+Lưu ý: con số 99.33% trong các bản cũ KHÔNG tái lập được, không dùng làm kết quả chính.
 ```
 
 So với model cũ `airdrawvocab_enhanced_model.h5`:
 
 ```text
-Model cũ accuracy: 98.95%, errors: 30
-Model mới accuracy: 99.33%, errors: 19
+So sánh kiến trúc (cùng split): baseline cổ điển ~61% < SmallCNN ~86.9% < ResNet-Sketch ~89.2% < VGG-style CNN ~90.4% (tốt nhất).
 ```
 
 Chi tiết nằm ở:

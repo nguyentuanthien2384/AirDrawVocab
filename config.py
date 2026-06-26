@@ -6,19 +6,41 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# Danh sách lớp từ vựng QuickDraw (mở rộng) — nguồn duy nhất ở vocab_pairs.py
-# Hiện tại: 40 lớp. Thêm/bớt từ vựng -> sửa vocab_pairs.VOCAB rồi train lại.
+# ============================================================================
+# NHÃN LỚP (CATEGORIES)
+# ----------------------------------------------------------------------------
+# Nguyên tắc thống nhất (đã khắc phục mâu thuẫn 19 vs 40):
+#   - CATEGORIES = nhãn THỰC TẾ mà model đang deploy đã được train, lấy từ
+#     models/categories.json. Đây là nguồn chuẩn cho mọi script train/evaluate
+#     để luôn khớp với artifact (.keras) và dữ liệu trong data/npy_28/.
+#   - VOCAB_CATEGORIES = toàn bộ từ vựng định nghĩa trong vocab_pairs.py
+#     (hiện 40 từ, dùng cho tra nghĩa/IPA/ví dụ ở backend & demo). Đây là
+#     "hướng mở rộng": muốn nhận diện đủ 40 lớp thì phải bổ sung dữ liệu các
+#     lớp mới vào data/npy_28/ rồi train lại, sau đó categories.json sẽ tự cập nhật.
+# ============================================================================
+import json as _json
+
+# 1) Toàn bộ từ vựng (để tra nghĩa) — không nhất thiết = số lớp model.
 try:
     from vocab_pairs import CATEGORIES as _VOCAB_CATEGORIES
-    CATEGORIES = list(_VOCAB_CATEGORIES)
+    VOCAB_CATEGORIES = list(_VOCAB_CATEGORIES)
 except Exception:
-    # Fallback: 19 lớp gốc nếu thiếu vocab_pairs.py (chỉ để tương thích lỗi import)
-    CATEGORIES = [
-        "apple", "baseball", "book", "bowtie", "diamond",
-        "dog", "door", "envelope", "eye", "fish",
-        "hat", "leaf", "lightning", "moon", "pants",
-        "scissors", "square", "star", "t-shirt",
-    ]
+    VOCAB_CATEGORIES = []
+
+# 2) Nhãn model thực tế (nguồn chuẩn cho train/evaluate).
+_FALLBACK_19 = [
+    "apple", "baseball", "book", "bowtie", "diamond",
+    "dog", "door", "envelope", "eye", "fish",
+    "hat", "leaf", "lightning", "moon", "pants",
+    "scissors", "square", "star", "t-shirt",
+]
+_CATEGORIES_JSON = ROOT / "models" / "categories.json"
+try:
+    CATEGORIES = _json.loads(_CATEGORIES_JSON.read_text(encoding="utf-8"))
+    assert isinstance(CATEGORIES, list) and len(CATEGORIES) > 0
+except Exception:
+    CATEGORIES = list(VOCAB_CATEGORIES) if VOCAB_CATEGORIES else list(_FALLBACK_19)
+
 NUM_CLASSES = len(CATEGORIES)
 
 # Chia dữ liệu cố định

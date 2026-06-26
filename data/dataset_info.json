@@ -176,5 +176,5 @@
   "total_npy_per_class": 1100,
   "generated_seconds": 234.82,
   "project_vocab_target": 40,
-  "note": "Project vocab is 40 in vocab_pairs.py. Bundled npy/model artifact may still contain 19 trained classes until re-downloaded/re-trained."
+  "note": "Model deploy + dataset bundled = 19 lop (khop categories.json). vocab_pairs.py dinh nghia 40 tu = HUONG MO RONG (chi de tra nghia/IPA). Muon nhan dien du 40 lop: them du lieu cac lop moi vao data/npy_28/ roi train lai."
 }

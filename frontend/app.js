@@ -58,6 +58,10 @@ const state = {
   strokeModelAvailable: false,
   lastSavedKey: "",
   imageModelReloaded: false,
+  referenceImage: null,
+  referenceImageInFlight: false,
+  referenceImageRequestId: 0,
+  referenceImageMessage: "Bấm Sinh hình thật sau khi vẽ xong để tạo ảnh.",
 };
 
 const CANVAS_W = 960;
@@ -265,7 +269,6 @@ function renderGameShell() {
 
           <div id="gameStage" class="game-stage mouse-mode">
             <video id="cameraVideo" autoplay muted playsinline></video>
-            <canvas id="guideCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
             <canvas id="drawCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
             <canvas id="handCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
             <canvas id="faceCanvas" width="${CANVAS_W}" height="${CANVAS_H}"></canvas>
@@ -283,12 +286,13 @@ function renderGameShell() {
               <button id="startBtn" class="primary">Bắt đầu</button>
               <button id="clearBtn" class="secondary">Xóa nét</button>
               <button id="skipBtn" class="secondary" disabled>Bỏ qua</button>
+              <button id="recognizeBtn" class="primary" type="button" disabled>Nhận diện</button>
+              <button id="generateImageBtn" class="secondary" type="button" disabled>Sinh hình thật</button>
               <button id="saveBtn" class="secondary" disabled>Lưu mẫu train</button>
               <span class="spacer"></span>
-              <label class="range-wrap">AI Speed <input id="speedRange" type="range" min="450" max="1200" value="${REALTIME_INTERVAL_MS}" step="50"></label>
             </div>
             <div class="progress"><span id="confidenceProgress"></span></div>
-            <p id="gameStatus" class="status">Bấm Bắt đầu để chơi. AI sẽ tự nhận diện trong lúc bạn vẽ.</p>
+            <p id="gameStatus" class="status">Bấm Bắt đầu để chơi. Vẽ xong rồi bấm Nhận diện hoặc Sinh hình thật; AI không tự đoán và không tự sinh ảnh trong lúc bạn vẽ.</p>
           </div>
         </section>
 
@@ -301,8 +305,18 @@ function renderGameShell() {
           </section>
 
           <section class="side-card">
-            <div class="side-header"><h3>Realtime AI</h3><span class="badge">Auto Judge</span></div>
-            <div id="predictionList" class="prediction-list">AI chưa có dữ liệu.</div>
+            <div class="side-header"><h3>Nhận diện AI</h3><span class="badge">Manual</span></div>
+            <div id="predictionList" class="prediction-list">AI chưa có dữ liệu. Vẽ xong bấm Nhận diện.</div>
+          </section>
+
+          <section class="side-card">
+            <div class="side-header"><h3>Hình thật sau khi vẽ</h3><span id="realImageBadge" class="badge warn">Chờ bấm</span></div>
+            <div id="realImageBox" class="real-image-box empty">Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.</div>
+            <div class="pvp-controls two storage-controls">
+              <button id="realImageStorageBtn" class="secondary" type="button">Storage hình thật</button>
+              <button id="panelStorageBtn" class="secondary" type="button">Storage tất cả</button>
+            </div>
+            <div id="panelStorageBox" class="mini-list"></div>
           </section>
 
           <section class="side-card">
@@ -313,7 +327,7 @@ function renderGameShell() {
               <div class="judge-cell"><span>Stroke</span><strong id="strokeScore">0</strong></div>
               <div class="judge-cell"><span>Speed</span><strong id="speedScore">0</strong></div>
             </div>
-            <p id="judgeFeedback" class="feedback">AI sẽ đánh giá khi bạn bắt đầu vẽ.</p>
+            <p id="judgeFeedback" class="feedback">AI sẽ đánh giá khi bạn bấm Nhận diện.</p>
           </section>
 
           <section class="side-card">
@@ -338,10 +352,11 @@ function renderGameShell() {
 
           <section class="side-card">
             <div class="side-header"><h3>Self-improving Loop</h3><span class="badge">Train</span></div>
-            <div class="pvp-controls three">
+            <div class="pvp-controls four">
               <button id="exportDatasetBtn" class="secondary" type="button">Export data</button>
               <button id="trainStrokeBtn" class="secondary" type="button">Train stroke</button>
               <button id="trainImageBtn" class="secondary" type="button">Train image</button>
+              <button id="storageBtn" class="secondary" type="button">Storage</button>
             </div>
             <div id="retrainBox" class="mini-list"><div class="mini-row"><span>Idle</span><small>Local/Colab pipeline</small></div></div>
           </section>
@@ -363,6 +378,8 @@ function renderGameShell() {
   wireGameEvents();
   setupCanvas();
   updateHud();
+  updateRecognizeButton();
+  updateReferenceImagePanel();
   renderProfile();
   renderLeaderboard();
   renderPvp();
@@ -382,12 +399,17 @@ function wireGameEvents() {
   );
   $("#clearBtn").addEventListener("click", clearDrawing);
   $("#skipBtn").addEventListener("click", skipRound);
+  $("#recognizeBtn").addEventListener("click", manualRecognizeDrawing);
+  $("#generateImageBtn")?.addEventListener("click", manualGenerateReferenceImage);
+  $("#realImageStorageBtn")?.addEventListener("click", () => showPanelStorage("real_image_after_draw"));
+  $("#panelStorageBtn")?.addEventListener("click", () => showPanelStorage(""));
   $("#saveBtn").addEventListener("click", () => saveStrokeSample(Boolean(state.prediction?.is_correct), true));
   $("#speakBtn").addEventListener("click", speakCurrentWord);
   $("#pvpBtn").addEventListener("click", togglePvp);
   $("#exportDatasetBtn").addEventListener("click", exportDataset);
   $("#trainStrokeBtn").addEventListener("click", () => startRetrain("stroke"));
   $("#trainImageBtn").addEventListener("click", () => startRetrain("image"));
+  $("#storageBtn")?.addEventListener("click", showSelfLoopStorage);
   $("#buildBenchmarkBtn")?.addEventListener("click", buildBenchmark);
   $("#evalReleaseBtn")?.addEventListener("click", evaluateRelease);
   $("#promoteDryRunBtn")?.addEventListener("click", promoteDryRun);
@@ -487,6 +509,7 @@ function beginStroke(point) {
   state.lastPoint = point;
   state.lastMid = point; // điểm giữa khởi đầu để vẽ đường cong LIỀN MẠCH
   state.hasDrawn = true;
+  updateRecognizeButton();
 }
 
 function extendStroke(point) {
@@ -498,6 +521,7 @@ function extendStroke(point) {
   state.currentStroke.push(point);
   state.lastPoint = point;
   state.hasDrawn = true;
+  updateRecognizeButton();
 }
 
 function endStroke() {
@@ -506,6 +530,11 @@ function endStroke() {
   }
   state.currentStroke = null;
   state.lastPoint = null;
+  updateRecognizeButton();
+  if (state.hasDrawn && !state.referenceImage && !state.referenceImageInFlight) {
+    state.referenceImageMessage = "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
+    updateReferenceImagePanel();
+  }
 }
 
 function drawSegment(a, b) {
@@ -706,7 +735,14 @@ function drawStrokeListToCanvas(strokes, source = "camera-face-sketch") {
     added += 1;
   }
   ctx.restore();
-  if (added > 0) state.hasDrawn = true;
+  if (added > 0) {
+    state.hasDrawn = true;
+    updateRecognizeButton();
+    if (!state.referenceImage && !state.referenceImageInFlight) {
+      state.referenceImageMessage = "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
+      updateReferenceImagePanel();
+    }
+  }
   return added;
 }
 
@@ -763,8 +799,10 @@ async function scanFaceSketch(auto = false) {
     updateCameraToolUI();
     if (added > 0) {
       setStatus(`Đã thêm ${added} nét khuôn mặt vào canvas vẽ (${escapeHtml(data.detector || "camera")}).`, "ok");
-      if (state.running && state.currentTarget && !state.predictInFlight) {
-        setTimeout(() => realtimePredict(), 0);
+      updateRecognizeButton();
+      if (!state.referenceImage && !state.referenceImageInFlight) {
+        state.referenceImageMessage = "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
+        updateReferenceImagePanel();
       }
     } else if (!auto) {
       setStatus("Đã thấy mặt nhưng nét sinh ra quá nhỏ/ít. Hãy đưa mặt gần camera hơn.", "error");
@@ -798,10 +836,12 @@ function clearDrawing() {
   state.consecutiveCorrect = 0;
   state.prediction = null;
   state.judge = null;
+  resetReferenceImage("Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.");
   updatePredictionPanel(null);
   updateJudge(null);
   $("#aiChip").textContent = "---";
   $("#confidenceProgress").style.width = "0%";
+  updateRecognizeButton();
 }
 
 async function setMode(mode) {
@@ -865,8 +905,9 @@ async function startGame() {
   startGameTimer();
   startRealtimeAI();
   if (state.mode === "camera") await startCamera();
+  updateRecognizeButton();
   setStatus(
-    "Final Boss Mode đang chạy: AI tự đoán real-time và tự qua màn khi đúng.",
+    "Final Boss Mode đang chạy: hãy vẽ xong rồi bấm Nhận diện hoặc Sinh hình thật. AI không tự đoán và không tự sinh ảnh trong lúc bạn vẽ.",
     "ok",
   );
 }
@@ -884,7 +925,7 @@ function nextRound() {
   state.timeLeft = state.roundTime;
   state.roundStartedAt = Date.now();
   state.lastSavedKey = "";
-  drawGuide(state.currentTarget.label);
+  resetReferenceImage("Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.");
   updateTargetPanel();
   updateHud();
 }
@@ -902,27 +943,29 @@ function startGameTimer() {
 }
 
 function startRealtimeAI() {
+  // Theo yêu cầu mới: không nhận diện tự động trong lúc người dùng đang vẽ.
+  // Hàm vẫn được giữ để các luồng cũ gọi an toàn, nhưng không tạo interval nữa.
   clearInterval(state.realtimeId);
-  const speed = () => Number($("#speedRange")?.value || REALTIME_INTERVAL_MS);
-  const tick = async () => {
-    if (
-      !state.running ||
-      !state.currentTarget ||
-      !state.hasDrawn ||
-      state.predictInFlight
-    )
-      return;
-    await realtimePredict();
-  };
-  state.realtimeId = setInterval(tick, speed());
-  $("#speedRange").addEventListener("change", () => {
-    clearInterval(state.realtimeId);
-    state.realtimeId = setInterval(tick, speed());
-  });
+  state.realtimeId = null;
 }
 
-async function realtimePredict() {
+async function manualRecognizeDrawing() {
+  if (!state.running || !state.currentTarget) {
+    setStatus("Bấm Bắt đầu trước khi nhận diện.", "error");
+    return;
+  }
+  if (!state.hasDrawn) {
+    setStatus("Bạn hãy vẽ xong rồi mới bấm Nhận diện.", "error");
+    return;
+  }
+  if (state.predictInFlight) return;
+  setStatus("Đang nhận diện nét vẽ...", "ok");
+  await realtimePredict({ manual: true });
+}
+
+async function realtimePredict({ manual = true } = {}) {
   state.predictInFlight = true;
+  updateRecognizeButton();
   try {
     const blob = await captureDrawingBlob();
     const form = new FormData();
@@ -973,11 +1016,12 @@ async function realtimePredict() {
       target: state.currentTarget?.label,
       score: state.score,
     });
-    handleRealtimeDecision(data);
+    handleRecognitionDecision(data, { manual });
   } catch (err) {
     setStatus(err.message, "error");
   } finally {
     state.predictInFlight = false;
+    updateRecognizeButton();
   }
 }
 
@@ -995,7 +1039,7 @@ function captureDrawingBlob() {
   });
 }
 
-function handleRealtimeDecision(data) {
+function handleRecognitionDecision(data, { manual = true } = {}) {
   const conf = Number(data.confidence || 0);
   const target = state.currentTarget?.label;
   $("#aiChip").textContent = `${data.label} ${(conf * 100).toFixed(0)}%`;
@@ -1006,7 +1050,26 @@ function handleRealtimeDecision(data) {
     0.58,
     SUCCESS_THRESHOLD_BASE - Math.min(state.streak, 8) * 0.01,
   );
-  if (data.label === target && conf >= threshold) {
+  const isCorrect = data.label === target && conf >= threshold;
+
+  // Không tự sinh ảnh sau khi nhận diện. Người dùng bấm riêng nút Sinh hình thật
+  // nếu muốn xem ảnh theo nhãn AI vừa đoán hoặc theo mục tiêu hiện tại.
+
+  if (manual) {
+    state.consecutiveCorrect = isCorrect ? 1 : 0;
+    if (isCorrect) {
+      setStatus(`Nhận diện đúng '${target}' (${Math.round(conf * 100)}%). Chuyển sang từ tiếp theo...`, "ok");
+      setTimeout(() => passRound(conf), 650);
+    } else {
+      setStatus(
+        `AI đoán '${data.label}' (${Math.round(conf * 100)}%), mục tiêu là '${target}'. Bạn có thể sửa nét rồi bấm Nhận diện lại.`,
+        "error",
+      );
+    }
+    return;
+  }
+
+  if (isCorrect) {
     state.consecutiveCorrect += 1;
   } else {
     state.consecutiveCorrect = Math.max(0, state.consecutiveCorrect - 1);
@@ -1066,6 +1129,7 @@ async function endGame(message) {
   stopAllLoops();
   $("#startBtn").textContent = "Bắt đầu";
   $("#skipBtn").disabled = true;
+  updateRecognizeButton();
   const duration = Math.round((Date.now() - state.startedAt) / 1000);
   const accuracy = state.attempts ? (state.correct / state.attempts) * 100 : 0;
   const form = new FormData();
@@ -1101,6 +1165,132 @@ function stopAllLoops() {
   clearInterval(state.realtimeId);
   state.timerId = null;
   state.realtimeId = null;
+}
+
+
+function updateRecognizeButton() {
+  const recognizeBtn = $("#recognizeBtn");
+  const generateBtn = $("#generateImageBtn");
+  const isDrawingNow = Boolean(state.currentStroke);
+  const canUseDrawing = Boolean(state.running && state.currentTarget && state.hasDrawn && !isDrawingNow);
+  if (recognizeBtn) {
+    recognizeBtn.disabled = !canUseDrawing || state.predictInFlight;
+    recognizeBtn.textContent = state.predictInFlight ? "Đang nhận diện..." : "Nhận diện";
+  }
+  if (generateBtn) {
+    generateBtn.disabled = !canUseDrawing || state.referenceImageInFlight;
+    generateBtn.textContent = state.referenceImageInFlight ? "Đang sinh..." : "Sinh hình thật";
+    generateBtn.title = isDrawingNow
+      ? "Hãy nhấc bút/dừng vẽ rồi mới sinh hình thật"
+      : "Sinh ảnh thật theo nhãn AI vừa nhận diện, hoặc theo từ mục tiêu nếu chưa nhận diện";
+  }
+}
+
+async function manualGenerateReferenceImage() {
+  if (!state.running || !state.currentTarget) {
+    setStatus("Bấm Bắt đầu trước khi sinh hình thật.", "error");
+    return;
+  }
+  if (!state.hasDrawn) {
+    setStatus("Bạn hãy vẽ xong rồi mới bấm Sinh hình thật.", "error");
+    return;
+  }
+  if (state.currentStroke) {
+    setStatus("Hãy nhấc bút/dừng vẽ rồi mới bấm Sinh hình thật.", "error");
+    return;
+  }
+  if (state.referenceImageInFlight) return;
+  const label = state.prediction?.label || state.currentTarget?.label;
+  if (!label) {
+    setStatus("Chưa có nhãn để sinh hình thật.", "error");
+    return;
+  }
+  const reason = state.prediction?.label ? "ai-label-manual" : "target-manual";
+  const sourceText = state.prediction?.label ? "nhãn AI vừa nhận diện" : "từ cần vẽ";
+  setStatus(`Đang sinh hình thật cho '${label}' theo ${sourceText}...`, "ok");
+  await generateReferenceImage(label, reason);
+}
+
+function resetReferenceImage(message = "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.") {
+  state.referenceImageRequestId += 1;
+  state.referenceImage = null;
+  state.referenceImageInFlight = false;
+  state.referenceImageMessage = message;
+  updateReferenceImagePanel();
+}
+
+function updateReferenceImagePanel() {
+  const box = $("#realImageBox");
+  const badge = $("#realImageBadge");
+  if (!box) return;
+  if (state.referenceImageInFlight) {
+    if (badge) {
+      badge.textContent = "Đang sinh";
+      badge.className = "badge warn";
+    }
+    box.className = "real-image-box loading";
+    box.innerHTML = "Đang sinh ảnh thật theo yêu cầu của bạn...";
+    return;
+  }
+  const data = state.referenceImage;
+  if (!data?.image) {
+    if (badge) {
+      badge.textContent = "Chờ bấm";
+      badge.className = "badge warn";
+    }
+    box.className = "real-image-box empty";
+    box.textContent = state.referenceImageMessage || "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.";
+    return;
+  }
+  if (badge) {
+    badge.textContent = data.label || "Ảnh thật";
+    badge.className = "badge";
+  }
+  const note = data.note ? `<small>${escapeHtml(data.note)}</small>` : "";
+  const storage = data.storage?.image || data.storage?.folder || data.storage?.metadata || "";
+  const storageLine = storage ? `<small>Đã lưu: ${escapeHtml(storage)}</small>` : "";
+  box.className = "real-image-box";
+  box.innerHTML = `
+    <img src="${data.image}" alt="Ảnh thật của ${escapeHtml(data.label || "từ vựng")}" />
+    <div class="real-image-meta">
+      <strong>${escapeHtml(data.label || "")}</strong>
+      <span>${escapeHtml(data.meaning_vi || "")}</span>
+      <small>Nguồn: ${escapeHtml(data.provider || "reference")}</small>
+      ${storageLine}
+      ${note}
+    </div>
+  `;
+}
+
+async function generateReferenceImage(label, reason = "target-after-draw") {
+  if (!label) return;
+  const requestId = state.referenceImageRequestId + 1;
+  state.referenceImageRequestId = requestId;
+  state.referenceImageInFlight = true;
+  state.referenceImage = null;
+  state.referenceImageMessage = "Đang sinh ảnh thật...";
+  updateReferenceImagePanel();
+  updateRecognizeButton();
+  try {
+    const form = new FormData();
+    form.append("label", label);
+    form.append("reason", reason);
+    form.append("target", state.currentTarget?.label || "");
+    form.append("predicted", state.prediction?.label || "");
+    const data = await apiPostForm("/image/generate", form);
+    if (requestId !== state.referenceImageRequestId) return;
+    state.referenceImage = { ...data, reason };
+    state.referenceImageInFlight = false;
+    updateReferenceImagePanel();
+    updateRecognizeButton();
+  } catch (err) {
+    if (requestId !== state.referenceImageRequestId) return;
+    state.referenceImage = null;
+    state.referenceImageInFlight = false;
+    state.referenceImageMessage = `Không sinh được ảnh thật: ${err.message}`;
+    updateReferenceImagePanel();
+    updateRecognizeButton();
+  }
 }
 
 function updateHud() {
@@ -1249,21 +1439,18 @@ function updateTargetPanel() {
   const item = state.currentTarget;
   if (!item) return;
   $("#targetWord").textContent = item.label;
-  const svg = getIllustrationSVG(item.label);
   $("#wordMeta").innerHTML = `
-    <div class="word-illustration" title="Hình minh hoạ: ${escapeHtml(item.label)}">${svg}</div>
     <p><b>Nghĩa:</b> ${escapeHtml(item.meaning_vi || item.label)}</p>
     <p><b>IPA:</b> ${escapeHtml(item.ipa || "")}</p>
     <p><b>Ví dụ:</b> ${escapeHtml(item.example_en || "")}</p>
     <p><b>Dịch:</b> ${escapeHtml(item.example_vi || "")}</p>
-    <p><b>Gợi ý vẽ:</b> ${escapeHtml(item.drawing_hint || "Vẽ hình dạng chính rõ ràng.")}</p>
   `;
 }
 
 function updatePredictionPanel(data) {
   const box = $("#predictionList");
   if (!data || !data.top5) {
-    box.textContent = "AI chưa có dữ liệu.";
+    box.textContent = "AI chưa có dữ liệu. Vẽ xong bấm Nhận diện.";
     return;
   }
   const conf = Number(data.confidence || 0);
@@ -1288,7 +1475,7 @@ function updatePredictionPanel(data) {
     ${faceRow}
     ${rerankRow}
     <div class="mini-row"><span>${match ? "Đúng mục tiêu" : "Đang lệch mục tiêu"}</span><small>${Math.round(conf * 100)}% / cần ${Math.round(threshold * 100)}%</small></div>
-    <div class="mini-row"><span>Auto pass</span><small>${state.consecutiveCorrect || 0}/2 lần đúng liên tiếp</small></div>
+    <div class="mini-row"><span>Chế độ</span><small>Nhận diện thủ công bằng nút</small></div>
   `;
   const rows = data.top5
     .map((p) => {
@@ -1315,7 +1502,7 @@ function updateJudge(judge) {
   $("#strokeScore").textContent = judge?.stroke_score ?? 0;
   $("#speedScore").textContent = judge?.speed_score ?? 0;
   if (!judge) {
-    $("#judgeFeedback").textContent = "AI sẽ đánh giá khi bạn bắt đầu vẽ.";
+    $("#judgeFeedback").textContent = "AI sẽ đánh giá khi bạn bấm Nhận diện.";
     return;
   }
   const verdict = judge.correct
@@ -1547,6 +1734,7 @@ async function exportDataset() {
     box.innerHTML = `
       <div class="mini-row"><span>Export OK</span><small>${data.samples || 0} mẫu · ${data.classes || 0} lớp</small></div>
       <div class="mini-row column"><span>Files</span><small>JSONL: ${escapeHtml(downloads.jsonl || "-")} · CSV: ${escapeHtml(downloads.csv || "-")} · Manifest: ${escapeHtml(downloads.manifest || "-")}</small></div>
+      <div class="mini-row column"><span>Storage</span><small>${escapeHtml(data.snapshot?.snapshot_dir || data.storage?.exports_latest || data.path || "-")}</small></div>
       <div class="mini-row"><span>Train stroke</span><small>${ready.ready_stroke ? "ready" : "cần thêm mẫu/lớp"}</small></div>
     `;
     await refreshProfileAndLeaderboard();
@@ -1609,6 +1797,7 @@ async function refreshRetrainStatus() {
     box.innerHTML = `
       <div class="mini-row"><span>${escapeHtml(data.status || "idle")}</span><small>${escapeHtml(data.mode || "-")} · ${data.process_running ? "running" : "stopped"}</small></div>
       <div class="mini-row column"><span>${escapeHtml(data.message || "")}</span><small>samples ${ready.total_samples || 0}, classes ${ready.classes || 0}, min/class ${ready.min_samples_per_class || 0}</small></div>
+      <div class="mini-row column"><span>Storage</span><small>${escapeHtml(data.storage?.base || data.job_dir || "data/self_improving_loop")}</small></div>
       ${jobRows}
       ${logTail}
     `;
@@ -1618,6 +1807,56 @@ async function refreshRetrainStatus() {
     if (data.process_running) setTimeout(refreshRetrainStatus, 2500);
   } catch (err) {
     box.innerHTML = `<div class="mini-row"><span>Status lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+
+
+async function showPanelStorage(section = "") {
+  const box = $("#panelStorageBox");
+  if (!box) return;
+  const title = section === "real_image_after_draw" ? "Hình thật sau khi vẽ" : "Tất cả panel";
+  try {
+    const qs = section ? `?section=${encodeURIComponent(section)}&limit=8` : "?limit=10";
+    const data = await apiGet(`/admin/panel-storage${qs}`);
+    const storage = data.storage || {};
+    const files = (data.recent_files || []).slice(0, section ? 6 : 8);
+    const countText = storage.counts
+      ? Object.entries(storage.counts)
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(" · ")
+      : "";
+    const fileRows = files
+      .map((f) => `<div class="mini-row column"><span>${escapeHtml(f.relative || f.name || "file")}</span><small>${Math.round((f.size_bytes || 0) / 1024)} KB · ${escapeHtml(f.path || "")}</small></div>`)
+      .join("");
+    box.innerHTML = `
+      <div class="mini-row column"><span>Storage ${escapeHtml(title)}</span><small>${escapeHtml(section ? storage[section] || storage.real_image_after_draw || "-" : storage.base || "-")}</small></div>
+      ${countText ? `<div class="mini-row column"><span>Số file</span><small>${escapeHtml(countText)}</small></div>` : ""}
+      ${fileRows || `<div class="mini-row"><span>Chưa có file</span><small>Bấm Sinh hình thật / Nhận diện / chơi game để tự lưu</small></div>`}
+    `;
+  } catch (err) {
+    box.innerHTML = `<div class="mini-row"><span>Storage lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+  }
+}
+
+async function showSelfLoopStorage() {
+  const box = $("#retrainBox");
+  if (!box) return;
+  try {
+    const data = await apiGet("/admin/self-improve/storage");
+    const storage = data.storage || {};
+    const files = (data.recent_files || []).slice(0, 5);
+    const fileRows = files
+      .map((f) => `<div class="mini-row"><span>${escapeHtml(f.relative || f.name || "file")}</span><small>${Math.round((f.size_bytes || 0) / 1024)} KB</small></div>`)
+      .join("");
+    box.innerHTML = `
+      <div class="mini-row column"><span>Self-improving storage</span><small>${escapeHtml(storage.base || "-")}</small></div>
+      <div class="mini-row column"><span>Samples log</span><small>${escapeHtml(storage.samples || "-")}</small></div>
+      <div class="mini-row column"><span>Latest export</span><small>${escapeHtml(storage.exports_latest || "-")}</small></div>
+      ${fileRows || `<div class="mini-row"><span>Chưa có file mới</span><small>hãy lưu mẫu/export/train</small></div>`}
+    `;
+  } catch (err) {
+    box.innerHTML = `<div class="mini-row"><span>Storage lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
   }
 }
 
@@ -2204,9 +2443,12 @@ function drawHandSkeleton(ctx, landmarks) {
 }
 
 function drawGuide(label) {
+  // Đã tắt lớp gợi ý vẽ hình trên canvas để người dùng tự vẽ từ đầu.
   const canvas = $("#guideCanvas");
+  if (!canvas) return;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  return;
   if (!label) return;
   ctx.save();
   ctx.strokeStyle = "rgba(20, 40, 80, 0.34)";

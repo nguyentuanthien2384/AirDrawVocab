@@ -6,6 +6,7 @@ import hashlib
 import secrets
 import sqlite3
 import subprocess
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -81,8 +82,38 @@ SESSION_COOKIE_NAME = "airdrawvocab_session"
 AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
 STROKE_MODEL_PATH = MODELS_DIR / "stroke_sequence_model.keras"
 STROKE_CATEGORIES_PATH = MODELS_DIR / "stroke_categories.json"
-RETRAIN_STATUS_PATH = ROOT / "data" / "retrain_status.json"
-EXPORTED_DATASET_DIR = ROOT / "data" / "self_improve_export"
+# Kho lưu riêng cho toàn bộ Self-improving Loop.
+# Mọi thao tác lưu mẫu, export dataset, train/retrain và reload model sẽ
+# tự ghi vết vào đây để dễ kiểm tra/lưu trữ mà không phải tìm rải rác nhiều nơi.
+SELF_IMPROVING_LOOP_DIR = ROOT / "data" / "self_improving_loop"
+SELF_LOOP_ACTIONS_DIR = SELF_IMPROVING_LOOP_DIR / "actions"
+SELF_LOOP_SAMPLES_DIR = SELF_IMPROVING_LOOP_DIR / "samples"
+SELF_LOOP_EXPORTS_DIR = SELF_IMPROVING_LOOP_DIR / "exports"
+SELF_LOOP_JOBS_DIR = SELF_IMPROVING_LOOP_DIR / "jobs"
+SELF_LOOP_STATUS_DIR = SELF_IMPROVING_LOOP_DIR / "status"
+SELF_LOOP_MODELS_DIR = SELF_IMPROVING_LOOP_DIR / "models"
+SELF_LOOP_README_PATH = SELF_IMPROVING_LOOP_DIR / "README.md"
+SELF_LOOP_ACTION_LOG = SELF_LOOP_ACTIONS_DIR / "events.jsonl"
+SELF_LOOP_SAMPLES_JSONL = SELF_LOOP_SAMPLES_DIR / "stroke_samples.jsonl"
+RETRAIN_STATUS_PATH = SELF_LOOP_STATUS_DIR / "retrain_status.json"
+EXPORTED_DATASET_DIR = SELF_LOOP_EXPORTS_DIR / "latest"
+
+# Kho lưu tự động cho các panel/khu vực còn lại ở giao diện phải.
+# Mục tiêu: khi người dùng bấm Nhận diện, Sinh hình thật, kết thúc game,
+# xem Skill Profile, Leaderboard hoặc tham gia PvP thì dữ liệu liên quan được
+# ghi thành file riêng để dễ kiểm tra ngoài database.
+PANEL_STORAGE_DIR = ROOT / "data" / "panel_storage"
+PANEL_ACTIONS_DIR = PANEL_STORAGE_DIR / "actions"
+AI_RECOGNITION_STORAGE_DIR = PANEL_STORAGE_DIR / "ai_recognition"
+REAL_IMAGE_STORAGE_DIR = PANEL_STORAGE_DIR / "real_image_after_draw"
+AI_JUDGE_STORAGE_DIR = PANEL_STORAGE_DIR / "ai_judge_mode"
+SKILL_PROFILE_STORAGE_DIR = PANEL_STORAGE_DIR / "skill_profile"
+LEADERBOARD_STORAGE_DIR = PANEL_STORAGE_DIR / "leaderboard"
+PVP_STORAGE_DIR = PANEL_STORAGE_DIR / "pvp_websocket"
+GAME_SESSION_STORAGE_DIR = PANEL_STORAGE_DIR / "game_sessions"
+PANEL_STORAGE_README_PATH = PANEL_STORAGE_DIR / "README.md"
+PANEL_ACTION_LOG = PANEL_ACTIONS_DIR / "events.jsonl"
+
 SELF_IMPROVED_MODEL_PATH = MODELS_DIR / "airdrawvocab_self_improved.keras"
 SELF_IMPROVED_CATEGORIES_PATH = MODELS_DIR / "categories_self_improved.json"
 TRAINING_MIN_CLASSES = int(os.getenv("TRAINING_MIN_CLASSES", "2"))
@@ -433,7 +464,558 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+def _self_loop_slug(prefix: str = "item") -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(prefix).strip().lower()) or "item"
+    return f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}_{safe}"
+
+
+def _write_json_file(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def _append_jsonl(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+
+
+def _ensure_self_improving_loop_storage() -> None:
+    for folder in (
+        SELF_LOOP_ACTIONS_DIR,
+        SELF_LOOP_SAMPLES_DIR / "by_label",
+        SELF_LOOP_EXPORTS_DIR / "latest",
+        SELF_LOOP_JOBS_DIR,
+        SELF_LOOP_STATUS_DIR,
+        SELF_LOOP_MODELS_DIR,
+    ):
+        folder.mkdir(parents=True, exist_ok=True)
+        keep = folder / ".gitkeep"
+        if not keep.exists():
+            keep.write_text("", encoding="utf-8")
+
+    if not SELF_LOOP_README_PATH.exists():
+        SELF_LOOP_README_PATH.write_text(
+            "# AirDrawVocab Self-improving Loop storage\n\n"
+            "Thư mục này được backend tạo và cập nhật tự động cho khu vực **Self-improving Loop**.\n\n"
+            "## Cấu trúc\n"
+            "- `samples/stroke_samples.jsonl`: append-only log mọi mẫu vẽ được lưu qua `/game/stroke`.\n"
+            "- `samples/by_label/<label>/<sample_id>.json`: bản chi tiết từng mẫu theo nhãn.\n"
+            "- `exports/latest/`: bản export mới nhất dùng cho nút **Export data** và link download.\n"
+            "- `exports/<timestamp>_export/`: snapshot riêng cho mỗi lần export, không bị ghi đè.\n"
+            "- `jobs/<timestamp>_<mode>/`: log, metadata và snapshot model của từng lần **Train stroke** hoặc **Train image**.\n"
+            "- `status/retrain_status.json`: trạng thái retrain mới nhất.\n"
+            "- `actions/events.jsonl`: nhật ký thao tác: lưu mẫu, export, train, reload model.\n\n"
+            "Có thể xóa các snapshot cũ nếu cần tiết kiệm dung lượng; không nên xóa database `data/airdrawvocab_app.sqlite3`.\n",
+            encoding="utf-8",
+        )
+
+
+def _self_loop_log_action(action: str, payload: Optional[dict] = None, user: Optional[dict] = None) -> None:
+    try:
+        _ensure_self_improving_loop_storage()
+        item = {
+            "at": _now_iso(),
+            "action": action,
+            "user": (user or {}).get("username") if isinstance(user, dict) else None,
+            "user_id": (user or {}).get("id") if isinstance(user, dict) else None,
+        }
+        if payload:
+            item.update(payload)
+        _append_jsonl(SELF_LOOP_ACTION_LOG, item)
+    except Exception:
+        pass
+
+
+def _self_loop_save_sample(sample: dict, user: Optional[dict] = None) -> None:
+    try:
+        _ensure_self_improving_loop_storage()
+        payload = {"saved_at": _now_iso(), "username": (user or {}).get("username") if user else None, **sample}
+        _append_jsonl(SELF_LOOP_SAMPLES_JSONL, payload)
+        label = str(sample.get("target") or "unknown").strip().lower().replace("/", "_") or "unknown"
+        sample_id = sample.get("sample_id") or _self_loop_slug("sample")
+        _write_json_file(SELF_LOOP_SAMPLES_DIR / "by_label" / label / f"{sample_id}.json", payload)
+        _self_loop_log_action("save_stroke_sample", {
+            "sample_id": sample.get("sample_id"),
+            "target": sample.get("target"),
+            "predicted": sample.get("predicted"),
+            "correct": sample.get("correct"),
+            "point_count": sample.get("point_count"),
+        }, user)
+    except Exception:
+        pass
+
+
+def _self_loop_storage_info() -> dict:
+    _ensure_self_improving_loop_storage()
+    def count_files(folder: Path) -> int:
+        try:
+            return sum(1 for p in folder.rglob("*") if p.is_file() and p.name != ".gitkeep")
+        except Exception:
+            return 0
+
+    return {
+        "base": str(SELF_IMPROVING_LOOP_DIR),
+        "actions": str(SELF_LOOP_ACTION_LOG),
+        "samples": str(SELF_LOOP_SAMPLES_JSONL),
+        "exports_latest": str(EXPORTED_DATASET_DIR),
+        "jobs": str(SELF_LOOP_JOBS_DIR),
+        "status": str(RETRAIN_STATUS_PATH),
+        "counts": {
+            "actions": count_files(SELF_LOOP_ACTIONS_DIR),
+            "samples": count_files(SELF_LOOP_SAMPLES_DIR),
+            "exports": count_files(SELF_LOOP_EXPORTS_DIR),
+            "jobs": count_files(SELF_LOOP_JOBS_DIR),
+        },
+    }
+
+
+
+
+def _safe_storage_name(value: str, fallback: str = "item") -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value or "").strip().lower())
+    safe = "_".join(part for part in safe.split("_") if part)
+    return safe or fallback
+
+
+def _panel_slug(prefix: str = "item") -> str:
+    return f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}_{_safe_storage_name(prefix)}"
+
+
+def _ensure_panel_storage() -> None:
+    folders = (
+        PANEL_ACTIONS_DIR,
+        AI_RECOGNITION_STORAGE_DIR,
+        REAL_IMAGE_STORAGE_DIR / "by_label",
+        AI_JUDGE_STORAGE_DIR,
+        SKILL_PROFILE_STORAGE_DIR / "snapshots",
+        LEADERBOARD_STORAGE_DIR / "snapshots",
+        PVP_STORAGE_DIR / "rooms",
+        GAME_SESSION_STORAGE_DIR,
+    )
+    for folder in folders:
+        folder.mkdir(parents=True, exist_ok=True)
+        keep = folder / ".gitkeep"
+        if not keep.exists():
+            keep.write_text("", encoding="utf-8")
+
+    if not PANEL_STORAGE_README_PATH.exists():
+        PANEL_STORAGE_README_PATH.write_text(
+            "# AirDrawVocab panel storage\n\n"
+            "Thư mục này được backend tạo tự động để lưu dữ liệu của các panel bên phải giao diện.\n\n"
+            "## Cấu trúc\n"
+            "- `ai_recognition/`: ảnh canvas và JSON kết quả mỗi lần bấm **Nhận diện**.\n"
+            "- `real_image_after_draw/by_label/<label>/`: PNG và metadata của ảnh sinh khi bấm **Sinh hình thật**.\n"
+            "- `ai_judge_mode/`: điểm Shape/Clarity/Stroke/Speed và feedback của AI Judge.\n"
+            "- `skill_profile/`: snapshot hồ sơ kỹ năng, phiên chơi và mẫu vẽ liên quan.\n"
+            "- `leaderboard/`: snapshot bảng xếp hạng mới nhất và lịch sử.\n"
+            "- `pvp_websocket/`: nhật ký join/leave/message/final score theo phòng PvP.\n"
+            "- `game_sessions/`: JSON mỗi lần kết thúc/lưu phiên chơi.\n"
+            "- `actions/events.jsonl`: nhật ký tổng hợp mọi thao tác đã ghi vào kho này.\n\n"
+            "Đặc biệt, phần **Hình thật sau khi vẽ** chỉ sinh và lưu ảnh khi người dùng bấm nút **Sinh hình thật**; không tự sinh khi đang vẽ.\n",
+            encoding="utf-8",
+        )
+
+
+def _panel_log_action(section: str, action: str, payload: Optional[dict] = None, user: Optional[dict] = None) -> None:
+    try:
+        _ensure_panel_storage()
+        item = {
+            "at": _now_iso(),
+            "section": section,
+            "action": action,
+            "user": (user or {}).get("username") if isinstance(user, dict) else None,
+            "user_id": (user or {}).get("id") if isinstance(user, dict) else None,
+        }
+        if payload:
+            item.update(payload)
+        _append_jsonl(PANEL_ACTION_LOG, item)
+    except Exception:
+        pass
+
+
+def _data_uri_to_bytes(data_uri: str) -> Optional[bytes]:
+    if not data_uri or not isinstance(data_uri, str):
+        return None
+    try:
+        if data_uri.startswith("data:"):
+            _, encoded = data_uri.split(",", 1)
+        else:
+            encoded = data_uri
+        return base64.b64decode(encoded)
+    except Exception:
+        return None
+
+
+def _panel_storage_info() -> dict:
+    _ensure_panel_storage()
+
+    def count_files(folder: Path) -> int:
+        try:
+            return sum(1 for p in folder.rglob("*") if p.is_file() and p.name != ".gitkeep")
+        except Exception:
+            return 0
+
+    return {
+        "base": str(PANEL_STORAGE_DIR),
+        "actions": str(PANEL_ACTION_LOG),
+        "ai_recognition": str(AI_RECOGNITION_STORAGE_DIR),
+        "real_image_after_draw": str(REAL_IMAGE_STORAGE_DIR),
+        "ai_judge_mode": str(AI_JUDGE_STORAGE_DIR),
+        "skill_profile": str(SKILL_PROFILE_STORAGE_DIR),
+        "leaderboard": str(LEADERBOARD_STORAGE_DIR),
+        "pvp_websocket": str(PVP_STORAGE_DIR),
+        "game_sessions": str(GAME_SESSION_STORAGE_DIR),
+        "counts": {
+            "actions": count_files(PANEL_ACTIONS_DIR),
+            "ai_recognition": count_files(AI_RECOGNITION_STORAGE_DIR),
+            "real_image_after_draw": count_files(REAL_IMAGE_STORAGE_DIR),
+            "ai_judge_mode": count_files(AI_JUDGE_STORAGE_DIR),
+            "skill_profile": count_files(SKILL_PROFILE_STORAGE_DIR),
+            "leaderboard": count_files(LEADERBOARD_STORAGE_DIR),
+            "pvp_websocket": count_files(PVP_STORAGE_DIR),
+            "game_sessions": count_files(GAME_SESSION_STORAGE_DIR),
+        },
+    }
+
+
+def _panel_recent_files(section: str = "", limit: int = 20) -> List[dict]:
+    _ensure_panel_storage()
+    section_map = {
+        "ai_recognition": AI_RECOGNITION_STORAGE_DIR,
+        "recognition": AI_RECOGNITION_STORAGE_DIR,
+        "real_image_after_draw": REAL_IMAGE_STORAGE_DIR,
+        "real_image": REAL_IMAGE_STORAGE_DIR,
+        "real": REAL_IMAGE_STORAGE_DIR,
+        "ai_judge_mode": AI_JUDGE_STORAGE_DIR,
+        "judge": AI_JUDGE_STORAGE_DIR,
+        "skill_profile": SKILL_PROFILE_STORAGE_DIR,
+        "profile": SKILL_PROFILE_STORAGE_DIR,
+        "leaderboard": LEADERBOARD_STORAGE_DIR,
+        "pvp_websocket": PVP_STORAGE_DIR,
+        "pvp": PVP_STORAGE_DIR,
+        "game_sessions": GAME_SESSION_STORAGE_DIR,
+        "sessions": GAME_SESSION_STORAGE_DIR,
+    }
+    folder = section_map.get(str(section or "").strip().lower(), PANEL_STORAGE_DIR)
+    try:
+        files = [p for p in folder.rglob("*") if p.is_file() and p.name != ".gitkeep"]
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return [
+            {
+                "name": p.name,
+                "path": str(p),
+                "relative": str(p.relative_to(PANEL_STORAGE_DIR)),
+                "size_bytes": int(p.stat().st_size),
+                "modified_at": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(),
+            }
+            for p in files[: max(1, min(int(limit), 100))]
+        ]
+    except Exception:
+        return []
+
+
+def _save_ai_judge_storage(judge: dict, recognition_id: str = "", user: Optional[dict] = None) -> dict:
+    try:
+        _ensure_panel_storage()
+        target = _safe_storage_name(str(judge.get("target") or "unknown"), "unknown")
+        grade = _safe_storage_name(str(judge.get("grade") or "grade"), "grade")
+        judge_id = _panel_slug(f"{target}_{grade}")
+        folder = AI_JUDGE_STORAGE_DIR / judge_id
+        payload = {
+            "id": judge_id,
+            "saved_at": _now_iso(),
+            "recognition_id": recognition_id,
+            "username": (user or {}).get("username") if user else None,
+            "judge": judge,
+        }
+        _write_json_file(folder / "judge.json", payload)
+        _append_jsonl(AI_JUDGE_STORAGE_DIR / "judge_results.jsonl", payload)
+        _panel_log_action("ai_judge_mode", "save_judge_result", {
+            "judge_id": judge_id,
+            "recognition_id": recognition_id,
+            "target": judge.get("target"),
+            "predicted": judge.get("predicted"),
+            "grade": judge.get("grade"),
+            "correct": judge.get("correct"),
+            "folder": str(folder),
+        }, user)
+        return {"id": judge_id, "folder": str(folder), "metadata": str(folder / "judge.json")}
+    except Exception:
+        return {}
+
+
+def _save_ai_recognition_storage(
+    image_bytes: bytes,
+    result: dict,
+    source: str,
+    target: str = "",
+    user: Optional[dict] = None,
+) -> dict:
+    try:
+        _ensure_panel_storage()
+        label = result.get("label") or target or "prediction"
+        recognition_id = _panel_slug(str(label))
+        folder = AI_RECOGNITION_STORAGE_DIR / recognition_id
+        folder.mkdir(parents=True, exist_ok=True)
+        image_path = folder / "drawing.png"
+        image_path.write_bytes(image_bytes)
+        payload = {
+            "id": recognition_id,
+            "saved_at": _now_iso(),
+            "username": (user or {}).get("username") if user else None,
+            "source": source,
+            "target": target,
+            "result": result,
+            "files": {"drawing": str(image_path), "metadata": str(folder / "prediction.json")},
+        }
+        _write_json_file(folder / "prediction.json", payload)
+        summary = {
+            "id": recognition_id,
+            "saved_at": payload["saved_at"],
+            "username": payload["username"],
+            "source": source,
+            "target": target,
+            "label": result.get("label"),
+            "confidence": result.get("confidence"),
+            "is_correct": result.get("is_correct"),
+            "folder": str(folder),
+        }
+        _append_jsonl(AI_RECOGNITION_STORAGE_DIR / "predictions.jsonl", summary)
+        judge_storage = {}
+        if isinstance(result.get("judge"), dict):
+            judge_storage = _save_ai_judge_storage(result["judge"], recognition_id, user)
+        _panel_log_action("ai_recognition", "save_prediction", summary, user)
+        return {
+            "id": recognition_id,
+            "folder": str(folder),
+            "drawing": str(image_path),
+            "metadata": str(folder / "prediction.json"),
+            "judge": judge_storage,
+        }
+    except Exception:
+        return {}
+
+
+def _save_real_image_storage(
+    label: str,
+    image_data_uri: str,
+    provider: str,
+    prompt: str = "",
+    reason: str = "manual-generate",
+    target: str = "",
+    predicted: str = "",
+    user: Optional[dict] = None,
+    note: str = "",
+    error: Optional[str] = None,
+) -> dict:
+    try:
+        _ensure_panel_storage()
+        safe_label = _safe_storage_name(label, "unknown")
+        image_id = _panel_slug(safe_label)
+        folder = REAL_IMAGE_STORAGE_DIR / "by_label" / safe_label
+        folder.mkdir(parents=True, exist_ok=True)
+        image_path = folder / f"{image_id}.png"
+        metadata_path = folder / f"{image_id}.json"
+        raw = _data_uri_to_bytes(image_data_uri)
+        if raw:
+            image_path.write_bytes(raw)
+        payload = {
+            "id": image_id,
+            "saved_at": _now_iso(),
+            "username": (user or {}).get("username") if user else None,
+            "label": label,
+            "target": target,
+            "predicted": predicted,
+            "provider": provider,
+            "reason": reason,
+            "prompt": prompt,
+            "note": note,
+            "error": error,
+            "files": {
+                "image": str(image_path) if raw else "",
+                "metadata": str(metadata_path),
+            },
+        }
+        _write_json_file(metadata_path, payload)
+        _append_jsonl(REAL_IMAGE_STORAGE_DIR / "real_images.jsonl", payload)
+        _panel_log_action("real_image_after_draw", "save_real_image", {
+            "image_id": image_id,
+            "label": label,
+            "provider": provider,
+            "reason": reason,
+            "folder": str(folder),
+            "image": str(image_path) if raw else "",
+        }, user)
+        return {"id": image_id, "folder": str(folder), "image": str(image_path) if raw else "", "metadata": str(metadata_path)}
+    except Exception:
+        return {}
+
+
+def _save_skill_profile_snapshot(profile: dict, user: Optional[dict] = None, action: str = "profile_snapshot") -> dict:
+    try:
+        _ensure_panel_storage()
+        profile_id = _panel_slug((user or {}).get("username") or "guest")
+        snapshots_dir = SKILL_PROFILE_STORAGE_DIR / "snapshots"
+        payload = {"id": profile_id, "saved_at": _now_iso(), "action": action, "profile": profile}
+        _write_json_file(SKILL_PROFILE_STORAGE_DIR / "latest.json", payload)
+        _write_json_file(snapshots_dir / f"{profile_id}.json", payload)
+        _append_jsonl(SKILL_PROFILE_STORAGE_DIR / "profile_snapshots.jsonl", {
+            "id": profile_id,
+            "saved_at": payload["saved_at"],
+            "username": (user or {}).get("username") if user else None,
+            "action": action,
+            "games": profile.get("stats", {}).get("games") if isinstance(profile.get("stats"), dict) else None,
+            "drawings": profile.get("stats", {}).get("drawings") if isinstance(profile.get("stats"), dict) else None,
+        })
+        _panel_log_action("skill_profile", action, {"profile_id": profile_id, "latest": str(SKILL_PROFILE_STORAGE_DIR / "latest.json")}, user)
+        return {"id": profile_id, "latest": str(SKILL_PROFILE_STORAGE_DIR / "latest.json"), "snapshot": str(snapshots_dir / f"{profile_id}.json")}
+    except Exception:
+        return {}
+
+
+def _save_leaderboard_snapshot(rows: List[dict]) -> dict:
+    try:
+        _ensure_panel_storage()
+        snapshot_id = _panel_slug("leaderboard")
+        snapshots_dir = LEADERBOARD_STORAGE_DIR / "snapshots"
+        payload = {"id": snapshot_id, "saved_at": _now_iso(), "leaderboard": rows}
+        _write_json_file(LEADERBOARD_STORAGE_DIR / "latest.json", payload)
+        _write_json_file(snapshots_dir / f"{snapshot_id}.json", payload)
+        _append_jsonl(LEADERBOARD_STORAGE_DIR / "leaderboard_snapshots.jsonl", {
+            "id": snapshot_id,
+            "saved_at": payload["saved_at"],
+            "players": len(rows),
+            "top_username": rows[0].get("username") if rows else None,
+            "top_score": rows[0].get("score") if rows else None,
+        })
+        _panel_log_action("leaderboard", "save_leaderboard_snapshot", {"snapshot_id": snapshot_id, "players": len(rows)}, None)
+        return {"id": snapshot_id, "latest": str(LEADERBOARD_STORAGE_DIR / "latest.json"), "snapshot": str(snapshots_dir / f"{snapshot_id}.json")}
+    except Exception:
+        return {}
+
+
+def _save_game_session_storage(session: dict, user: Optional[dict] = None) -> dict:
+    try:
+        _ensure_panel_storage()
+        session_id = session.get("session_id") or _panel_slug("session")
+        filename = f"session_{session_id}.json" if isinstance(session_id, int) or str(session_id).isdigit() else f"{session_id}.json"
+        payload = {"saved_at": _now_iso(), "username": (user or {}).get("username") if user else None, "session": session}
+        path = GAME_SESSION_STORAGE_DIR / filename
+        _write_json_file(path, payload)
+        _append_jsonl(GAME_SESSION_STORAGE_DIR / "sessions.jsonl", payload)
+        _panel_log_action("game_sessions", "save_game_session", {"session_id": session_id, "path": str(path)}, user)
+        return {"path": str(path)}
+    except Exception:
+        return {}
+
+
+def _save_pvp_storage(room: str, event: dict, action: str = "message", username: str = "guest") -> dict:
+    try:
+        _ensure_panel_storage()
+        safe_room = _safe_storage_name(room, "room")
+        room_dir = PVP_STORAGE_DIR / "rooms" / safe_room
+        room_dir.mkdir(parents=True, exist_ok=True)
+        payload = {"at": _now_iso(), "room": room, "username": username, "action": action, "event": event}
+        _append_jsonl(room_dir / "events.jsonl", payload)
+        if action in {"score", "final", "join", "leave"}:
+            _write_json_file(room_dir / "latest_event.json", payload)
+        _panel_log_action("pvp_websocket", action, {"room": room, "room_dir": str(room_dir), "type": event.get("type")}, {"username": username})
+        return {"room_dir": str(room_dir), "events": str(room_dir / "events.jsonl")}
+    except Exception:
+        return {}
+
+def _copy_if_exists(src: Path, dst: Path) -> Optional[str]:
+    try:
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            return str(dst)
+    except Exception:
+        return None
+    return None
+
+
+def _self_loop_snapshot_export(manifest: dict) -> dict:
+    snapshot_dir = SELF_LOOP_EXPORTS_DIR / _self_loop_slug("export")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    files = {}
+    for name in ("stroke_samples.jsonl", "stroke_samples.csv", "training_manifest.json"):
+        saved = _copy_if_exists(EXPORTED_DATASET_DIR / name, snapshot_dir / name)
+        if saved:
+            files[name] = saved
+    summary = {
+        "created_at": _now_iso(),
+        "snapshot_dir": str(snapshot_dir),
+        "samples": manifest.get("samples"),
+        "classes": manifest.get("classes"),
+        "files": files,
+    }
+    _write_json_file(snapshot_dir / "export_summary.json", summary)
+    return summary
+
+
+def _self_loop_create_training_job(mode: str, user: dict, epochs: int, readiness: dict, script: str) -> Tuple[Path, dict]:
+    job_dir = SELF_LOOP_JOBS_DIR / _self_loop_slug(mode)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    log_path = job_dir / f"retrain_{mode}.log"
+    job_meta = {
+        "created_at": _now_iso(),
+        "mode": mode,
+        "script": script,
+        "epochs": epochs,
+        "requested_by": user.get("username"),
+        "readiness": readiness,
+        "log_path": str(log_path),
+        "job_dir": str(job_dir),
+    }
+    _write_json_file(job_dir / "job.json", job_meta)
+    _self_loop_log_action("start_retrain", job_meta, user)
+    return log_path, job_meta
+
+
+def _self_loop_finalize_training_job(status_payload: dict, final_status: str, returncode: Optional[int]) -> None:
+    try:
+        log_path = Path(str(status_payload.get("log") or ""))
+        job_dir = log_path.parent if log_path else SELF_LOOP_JOBS_DIR / _self_loop_slug("finished")
+        job_dir.mkdir(parents=True, exist_ok=True)
+        final_payload = {
+            "finished_at": _now_iso(),
+            "final_status": final_status,
+            "returncode": returncode,
+            "status_payload": status_payload,
+            "training_readiness": _training_readiness(None) if "_training_readiness" in globals() else {},
+        }
+        _write_json_file(job_dir / "final_status.json", final_payload)
+        mode = str(status_payload.get("mode") or "").lower()
+        model_dir = job_dir / "models"
+        copied = []
+        if mode == "stroke":
+            for src in (STROKE_MODEL_PATH, STROKE_CATEGORIES_PATH):
+                saved = _copy_if_exists(src, model_dir / src.name)
+                if saved:
+                    copied.append(saved)
+        elif mode == "image":
+            for src in (SELF_IMPROVED_MODEL_PATH, SELF_IMPROVED_CATEGORIES_PATH):
+                saved = _copy_if_exists(src, model_dir / src.name)
+                if saved:
+                    copied.append(saved)
+        if copied:
+            _write_json_file(job_dir / "model_snapshot.json", {"copied_at": _now_iso(), "files": copied})
+        _self_loop_log_action("finish_retrain", {
+            "mode": mode,
+            "final_status": final_status,
+            "returncode": returncode,
+            "job_dir": str(job_dir),
+            "copied_models": copied,
+        })
+    except Exception:
+        pass
+
+
 def init_app_db() -> None:
+    _ensure_self_improving_loop_storage()
+    _ensure_panel_storage()
     with get_db() as conn:
         conn.execute(
             """
@@ -1580,9 +2162,10 @@ async def predict(request: Request, file: UploadFile = File(...), source: str = 
     top3 = _top3_from_predictions(preds)
 
     reply = foza_chatbot_reply(label, confidence, top3)
-    log_prediction(user_from_request(request), label, confidence, normalized_source)
+    user = user_from_request(request)
+    log_prediction(user, label, confidence, normalized_source)
 
-    return {
+    result = {
         "label": label,
         "meaning_vi": VI_MEANINGS.get(label, label),
         "confidence": confidence,
@@ -1593,6 +2176,8 @@ async def predict(request: Request, file: UploadFile = File(...), source: str = 
         "source": normalized_source,
         "model_used": str(active_model_path),
     }
+    result["storage"] = _save_ai_recognition_storage(image_bytes, result, normalized_source, "", user)
+    return result
 
 
 
@@ -2000,7 +2585,7 @@ async def predict_godmode(
         rerank_info,
     )
     ai_source = "image-cnn+shape-rerank" if rerank_info.get("used") else "image-cnn"
-    return {
+    result = {
         "ok": True,
         "label": label,
         "meaning_vi": VI_MEANINGS.get(label, label),
@@ -2016,6 +2601,14 @@ async def predict_godmode(
         "raw_label": rerank_info.get("raw_label", label),
         "raw_confidence": rerank_info.get("raw_confidence", confidence),
     }
+    result["storage"] = _save_ai_recognition_storage(
+        image_bytes,
+        {k: v for k, v in result.items() if k != "storage"},
+        normalized_source,
+        target_label,
+        user_from_request(request),
+    )
+    return result
 
 
 @app.post("/camera/face/analyze")
@@ -2135,7 +2728,7 @@ def game_profile(request: Request):
     ]
 
     training = _training_readiness(user["id"])
-    return {
+    payload = {
         "authenticated": True,
         "user": user,
         "stats": {
@@ -2157,6 +2750,8 @@ def game_profile(request: Request):
         "recent_sessions": [dict(r) for r in recent_sessions],
         "training": training,
     }
+    payload["storage"] = _save_skill_profile_snapshot(payload, user)
+    return payload
 
 
 @app.get("/game/leaderboard")
@@ -2183,7 +2778,9 @@ def game_leaderboard():
             LIMIT 10
             """
         ).fetchall()
-    return {"leaderboard": [dict(r) for r in rows]}
+    leaderboard_rows = [dict(r) for r in rows]
+    storage = _save_leaderboard_snapshot(leaderboard_rows)
+    return {"leaderboard": leaderboard_rows, "storage": storage}
 
 
 @app.post("/game/session")
@@ -2197,15 +2794,28 @@ async def save_game_session(
     mode: str = Form("mouse"),
 ):
     user = user_from_request(request)
+    created_at = _now_iso()
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO game_sessions(user_id, score, level, streak, accuracy, duration_seconds, mode, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user["id"] if user else None, int(score), int(level), int(streak), float(accuracy), int(duration_seconds), mode, _now_iso()),
+            (user["id"] if user else None, int(score), int(level), int(streak), float(accuracy), int(duration_seconds), mode, created_at),
         )
-    return {"ok": True, "session_id": int(cur.lastrowid) if cur else None}
+    payload = {
+        "ok": True,
+        "session_id": int(cur.lastrowid) if cur else None,
+        "score": int(score),
+        "level": int(level),
+        "streak": int(streak),
+        "accuracy": float(accuracy),
+        "duration_seconds": int(duration_seconds),
+        "mode": mode,
+        "created_at": created_at,
+    }
+    payload["storage"] = _save_game_session_storage(payload, user)
+    return payload
 
 
 @app.post("/game/stroke")
@@ -2253,14 +2863,40 @@ async def save_stroke_sample(
                 _now_iso(),
             ),
         )
-    return {
+    sample_result = {
         "ok": True,
         "sample_id": int(cur.lastrowid) if cur else None,
         "target": target_label,
         "predicted": predicted_label,
+        "confidence": float(confidence),
         "correct": bool(int(correct or 0)),
+        "mode": mode.strip().lower()[:32],
+        "manual": bool(int(manual or 0)),
         "point_count": max(0, points),
+        "strokes": parsed if isinstance(parsed, list) else [],
+        "judge": parsed_judge if isinstance(parsed_judge, dict) else {},
+        "created_at": _now_iso(),
     }
+    _self_loop_save_sample(sample_result, user)
+    try:
+        skill_sample_dir = SKILL_PROFILE_STORAGE_DIR / "stroke_samples" / _safe_storage_name(target_label, "unknown")
+        skill_sample_path = skill_sample_dir / f"sample_{sample_result['sample_id'] or _panel_slug('sample')}.json"
+        _write_json_file(skill_sample_path, {"saved_at": _now_iso(), "username": user.get("username") if user else None, "sample": sample_result})
+        _append_jsonl(SKILL_PROFILE_STORAGE_DIR / "stroke_samples.jsonl", {
+            "saved_at": _now_iso(),
+            "username": user.get("username") if user else None,
+            "sample_id": sample_result.get("sample_id"),
+            "target": target_label,
+            "predicted": predicted_label,
+            "confidence": sample_result.get("confidence"),
+            "correct": sample_result.get("correct"),
+            "path": str(skill_sample_path),
+        })
+        _panel_log_action("skill_profile", "save_stroke_sample", {"sample_id": sample_result.get("sample_id"), "path": str(skill_sample_path)}, user)
+        sample_result["panel_storage"] = {"skill_profile_sample": str(skill_sample_path)}
+    except Exception:
+        pass
+    return sample_result
 
 
 @app.post("/predict_stroke")
@@ -2354,6 +2990,13 @@ def dataset_export(request: Request):
         "training_readiness": readiness,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    snapshot = _self_loop_snapshot_export(manifest)
+    _self_loop_log_action("export_dataset", {
+        "samples": len(exported_rows),
+        "classes": len(label_summary),
+        "latest_dir": str(EXPORTED_DATASET_DIR),
+        "snapshot_dir": snapshot.get("snapshot_dir"),
+    }, user)
 
     return {
         "ok": True,
@@ -2361,6 +3004,8 @@ def dataset_export(request: Request):
         "samples": len(exported_rows),
         "classes": len(label_summary),
         "path": str(EXPORTED_DATASET_DIR),
+        "storage": _self_loop_storage_info(),
+        "snapshot": snapshot,
         "downloads": {
             "jsonl": "/dataset/download/stroke_samples.jsonl",
             "csv": "/dataset/download/stroke_samples.csv",
@@ -2416,15 +3061,24 @@ def retrain_start(request: Request, mode: str = Form("stroke"), epochs: int = Fo
         if retrain_process and retrain_process.poll() is None:
             return {"ok": False, "message": "Đang có job retrain chạy.", "status": _read_retrain_status()}
         script = "train_stroke_model.py" if mode == "stroke" else "train_image_model.py"
-        log_path = ROOT / "data" / f"retrain_{mode}.log"
         safe_epochs = max(1, min(int(epochs), 50))
-        _write_retrain_status("running", f"Đang chạy {script}", {"mode": mode, "log": str(log_path), "started_by": user["username"], "readiness": readiness})
+        log_path, job_meta = _self_loop_create_training_job(mode, user, safe_epochs, readiness, script)
+        _write_retrain_status("running", f"Đang chạy {script}", {
+            "mode": mode,
+            "log": str(log_path),
+            "job_dir": str(log_path.parent),
+            "started_by": user["username"],
+            "readiness": readiness,
+            "storage": _self_loop_storage_info(),
+        })
         cmd = [sys.executable, "-X", "utf8", str(ROOT / "src" / "training" / script), "--epochs", str(safe_epochs)]
         if mode == "image":
             cmd.extend(["--config", str(ROOT / "configs" / "image_resnet_sketch.yaml")])
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
+        env["AIRDRAW_RETRAIN_STATUS_PATH"] = str(RETRAIN_STATUS_PATH)
+        env["AIRDRAW_SELF_LOOP_JOB_DIR"] = str(log_path.parent)
         log_file = open(log_path, "w", encoding="utf-8")
         retrain_process = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log_file, stderr=subprocess.STDOUT, env=env)
         with get_db() as conn:
@@ -2461,17 +3115,62 @@ def retrain_status():
                 status["process_running"] = False
                 status["returncode"] = returncode
             _update_training_job(retrain_job_id, final_status, message)
+            _self_loop_finalize_training_job(status, final_status, returncode)
     else:
         status["process_running"] = False
 
-    log_path = status.get("log") or (ROOT / "data" / f"retrain_{status.get('mode', 'stroke')}.log")
+    log_path = status.get("log") or (SELF_LOOP_JOBS_DIR / f"retrain_{status.get('mode', 'stroke')}.log")
     status["log_tail"] = _tail_file(log_path)
     status["training_readiness"] = _training_readiness(None)
     status["recent_jobs"] = _recent_training_jobs()
     status["model_runtime"] = _runtime_model_info()
     status["self_improved_model_exists"] = SELF_IMPROVED_MODEL_PATH.exists()
+    status["storage"] = _self_loop_storage_info()
     return status
 
+
+@app.get("/admin/self-improve/storage")
+def admin_self_improve_storage(request: Request):
+    """Xem nhanh kho lưu tự động của Self-improving Loop."""
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để xem kho Self-improving Loop.")
+    info = _self_loop_storage_info()
+
+    def recent_files(folder: Path, limit: int = 20) -> List[dict]:
+        try:
+            files = [p for p in folder.rglob("*") if p.is_file() and p.name != ".gitkeep"]
+            files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return [
+                {
+                    "name": p.name,
+                    "path": str(p),
+                    "relative": str(p.relative_to(SELF_IMPROVING_LOOP_DIR)),
+                    "size_bytes": int(p.stat().st_size),
+                    "modified_at": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat(),
+                }
+                for p in files[:limit]
+            ]
+        except Exception:
+            return []
+
+    return {"ok": True, "storage": info, "recent_files": recent_files(SELF_IMPROVING_LOOP_DIR)}
+
+
+
+
+@app.get("/admin/panel-storage")
+def admin_panel_storage(request: Request, section: str = "", limit: int = 20):
+    """Xem nhanh kho lưu tự động của các panel: nhận diện, hình thật, judge, profile, leaderboard, PvP."""
+    user = user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Cần đăng nhập để xem kho lưu các panel.")
+    return {
+        "ok": True,
+        "section": section or "all",
+        "storage": _panel_storage_info(),
+        "recent_files": _panel_recent_files(section, limit),
+    }
 
 @app.post("/admin/model/reload")
 def admin_model_reload(request: Request, kind: str = Form("self_improved")):
@@ -2486,7 +3185,8 @@ def admin_model_reload(request: Request, kind: str = Form("self_improved")):
         info = _reload_image_runtime(MODEL_PATH, CATEGORIES_PATH)
     else:
         raise HTTPException(status_code=400, detail="kind phải là self_improved hoặc base.")
-    return {"ok": True, "reloaded_by": user["username"], "model": info}
+    _self_loop_log_action("reload_model", {"kind": kind, "model": info}, user)
+    return {"ok": True, "reloaded_by": user["username"], "model": info, "storage": _self_loop_storage_info()}
 
 
 @app.websocket("/ws/pvp/{room}")
@@ -2494,12 +3194,14 @@ async def websocket_pvp(websocket: WebSocket, room: str):
     username = websocket.query_params.get("username", "guest")[:32] or "guest"
     room_name = pvp_manager.normalize_room(room)
     await pvp_manager.connect(room_name, websocket, username)
+    _save_pvp_storage(room_name, {"type": "join", "message": f"{username} joined room {room_name}."}, "join", username)
     try:
         while True:
             payload = await websocket.receive_json()
             msg_type = payload.get("type", "event")
             meta = pvp_manager.update_player(websocket, payload)
             payload.update({"username": username, "players": pvp_manager.players(room_name)})
+            _save_pvp_storage(room_name, payload, msg_type, username)
             if msg_type in {"score", "final"}:
                 try:
                     with get_db() as conn:
@@ -2516,7 +3218,9 @@ async def websocket_pvp(websocket: WebSocket, room: str):
     except WebSocketDisconnect:
         meta = pvp_manager.disconnect(websocket)
         if meta:
-            await pvp_manager.broadcast(meta["room"], {"type": "system", "message": f"{meta['username']} left.", "players": pvp_manager.players(meta["room"])})
+            leave_payload = {"type": "system", "message": f"{meta['username']} left.", "players": pvp_manager.players(meta["room"])}
+            _save_pvp_storage(meta["room"], leave_payload, "leave", meta["username"])
+            await pvp_manager.broadcast(meta["room"], leave_payload)
 
 
 @app.post("/camera/face-strokes")
@@ -2576,36 +3280,60 @@ async def image_reference(label: str = Form(...)):
 
 
 @app.post("/image/generate")
-async def image_generate(label: str = Form(...)):
-    """Tạo ảnh tham khảo chân thực theo nhãn đã nhận diện, có fallback offline."""
+async def image_generate(
+    request: Request,
+    label: str = Form(...),
+    reason: str = Form("manual-generate"),
+    target: str = Form(""),
+    predicted: str = Form(""),
+):
+    """Tạo ảnh tham khảo chân thực theo nhãn đã nhận diện, có fallback offline.
+
+    Endpoint này chỉ được frontend gọi khi người dùng bấm nút **Sinh hình thật**.
+    Mỗi ảnh sinh ra được lưu vào `data/panel_storage/real_image_after_draw/`.
+    """
+    user = user_from_request(request)
     label = label.strip().lower()
+    target = target.strip().lower()
+    predicted = predicted.strip().lower()
+    reason = reason.strip().lower()[:80] or "manual-generate"
     if label not in all_vocab_category_set:
         raise HTTPException(status_code=400, detail=f"Nhãn không hợp lệ: {label}")
 
+    prompt = build_realistic_prompt(label)
     ai_image, error = generate_openai_reference_image(label)
     if ai_image:
-        return {
+        payload = {
             "ok": True,
             "label": label,
             "meaning_vi": VI_MEANINGS.get(label, label),
             "provider": f"openai:{OPENAI_IMAGE_MODEL}",
-            "prompt": build_realistic_prompt(label),
+            "prompt": prompt,
             "image": ai_image,
         }
+        payload["storage"] = _save_real_image_storage(
+            label, ai_image, payload["provider"], prompt, reason, target, predicted, user
+        )
+        return payload
 
-    return {
+    fallback_image = create_offline_reference_image(label)
+    payload = {
         "ok": True,
         "label": label,
         "meaning_vi": VI_MEANINGS.get(label, label),
         "provider": "offline-pil-reference",
-        "prompt": build_realistic_prompt(label),
-        "image": create_offline_reference_image(label),
+        "prompt": prompt,
+        "image": fallback_image,
         "note": (
             "Chưa có OPENAI_API_KEY hoặc API tạo ảnh chưa gọi được, "
             "nên hệ thống dùng ảnh tham khảo offline. Cấu hình OPENAI_API_KEY để tạo ảnh photorealistic."
         ),
         "error": error,
     }
+    payload["storage"] = _save_real_image_storage(
+        label, fallback_image, payload["provider"], prompt, reason, target, predicted, user, payload["note"], error
+    )
+    return payload
 
 
 @app.post("/face/enroll")

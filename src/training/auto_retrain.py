@@ -29,13 +29,14 @@ except Exception:
     pass
 
 import argparse
+import os
 import json
 import sqlite3
 import subprocess
 from datetime import datetime
 
 DB_PATH = ROOT / "data" / "airdrawvocab_app.sqlite3"
-STATE_PATH = ROOT / "data" / "auto_retrain_state.json"
+STATE_PATH = Path(os.getenv("AIRDRAW_AUTO_RETRAIN_STATE_PATH", str(ROOT / "data" / "self_improving_loop" / "status" / "auto_retrain_state.json")))
 SCRIPTS = {
     "stroke": ROOT / "src" / "training" / "train_stroke_model.py",
     "image": ROOT / "src" / "training" / "self_improve_retrain.py",

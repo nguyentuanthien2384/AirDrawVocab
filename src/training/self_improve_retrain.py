@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -27,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = ROOT / "data" / "airdrawvocab_app.sqlite3"
 NPY_DIR = ROOT / "data" / "npy_28"
 MODELS_DIR = ROOT / "models"
-STATUS_PATH = ROOT / "data" / "retrain_status.json"
+STATUS_PATH = Path(os.getenv("AIRDRAW_RETRAIN_STATUS_PATH", str(ROOT / "data" / "self_improving_loop" / "status" / "retrain_status.json")))
 CANVAS_W = 960
 CANVAS_H = 540
 

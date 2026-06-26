@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import List, Tuple
@@ -45,7 +46,7 @@ from src.utils.model_versioning import save_versioned_model
 
 DB_PATH = ROOT / "data" / "airdrawvocab_app.sqlite3"
 MODELS_DIR = ROOT / "models"
-STATUS_PATH = ROOT / "data" / "retrain_status.json"
+STATUS_PATH = Path(os.getenv("AIRDRAW_RETRAIN_STATUS_PATH", str(ROOT / "data" / "self_improving_loop" / "status" / "retrain_status.json")))
 REPORTS_DIR = ROOT / "assets" / "reports" / "stroke"
 
 

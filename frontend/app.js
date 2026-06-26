@@ -459,7 +459,9 @@ async function setCameraTool(tool) {
   state.handLoop = false;
   state.faceLoop = false;
   state.filteredPoint = null;
+  if (typeof resetHandEuro === "function") resetHandEuro();
   state.faceFilteredPoint = null;
+  if (typeof resetFaceEuro === "function") resetFaceEuro();
   state.faceCenter = null;
   state.faceDrawingActive = false;
   state.penLiftFrames = 0;
@@ -516,6 +518,35 @@ function extendStroke(point) {
   if (!state.lastPoint) {
     beginStroke(point);
     return;
+  }
+  const dx = point.x - state.lastPoint.x;
+  const dy = point.y - state.lastPoint.y;
+  const dist = Math.hypot(dx, dy);
+  // CHỐNG "KÉO NÉT": nếu đầu ngón nhảy quá xa giữa 2 khung (thường do nhấc tay
+  // rồi đặt sang chỗ khác), KHÔNG nối liền mà KẾT THÚC nét cũ và BẮT ĐẦU nét mới
+  // -> mỗi nét tách bạch, không bị đường thẳng nối các nét như trước.
+  const MAX_JUMP = 150;
+  if (dist > MAX_JUMP) {
+    endStroke();
+    beginStroke(point);
+    return;
+  }
+  // Nội suy: nếu khoảng cách vừa phải nhưng hơi lớn (tay di nhanh), chèn điểm
+  // trung gian để nét trong CÙNG một stroke vẫn liền mạch.
+  const STEP = 18;
+  if (dist > STEP * 1.5) {
+    const steps = Math.min(20, Math.floor(dist / STEP));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const mid = {
+        x: state.lastPoint.x + dx * t,
+        y: state.lastPoint.y + dy * t,
+        t: state.lastPoint.t + (point.t - state.lastPoint.t) * t,
+      };
+      drawSegment(state.lastPoint, mid);
+      state.currentStroke.push(mid);
+      state.lastPoint = mid;
+    }
   }
   drawSegment(state.lastPoint, point);
   state.currentStroke.push(point);
@@ -832,6 +863,7 @@ function clearDrawing() {
   state.lastMid = null;
   state.penLiftFrames = 0;
   state.filteredPoint = null;
+  if (typeof resetHandEuro === "function") resetHandEuro();
   state.predictionBuffer = [];
   state.consecutiveCorrect = 0;
   state.prediction = null;
@@ -1246,18 +1278,12 @@ function updateReferenceImagePanel() {
     badge.textContent = data.label || "Ảnh thật";
     badge.className = "badge";
   }
-  const note = data.note ? `<small>${escapeHtml(data.note)}</small>` : "";
-  const storage = data.storage?.image || data.storage?.folder || data.storage?.metadata || "";
-  const storageLine = storage ? `<small>Đã lưu: ${escapeHtml(storage)}</small>` : "";
   box.className = "real-image-box";
   box.innerHTML = `
     <img src="${data.image}" alt="Ảnh thật của ${escapeHtml(data.label || "từ vựng")}" />
     <div class="real-image-meta">
       <strong>${escapeHtml(data.label || "")}</strong>
       <span>${escapeHtml(data.meaning_vi || "")}</span>
-      <small>Nguồn: ${escapeHtml(data.provider || "reference")}</small>
-      ${storageLine}
-      ${note}
     </div>
   `;
 }
@@ -1726,36 +1752,31 @@ function renderPvp(players = []) {
 }
 
 async function exportDataset() {
-  const box = $("#retrainBox");
+  // Chạy im lặng: chỉ export & lưu, không đổ log ra panel.
+  setStatus("Đang export dữ liệu...", "");
   try {
     const data = await apiGet("/dataset/export");
-    const downloads = data.downloads || {};
-    const ready = data.training_readiness || {};
-    box.innerHTML = `
-      <div class="mini-row"><span>Export OK</span><small>${data.samples || 0} mẫu · ${data.classes || 0} lớp</small></div>
-      <div class="mini-row column"><span>Files</span><small>JSONL: ${escapeHtml(downloads.jsonl || "-")} · CSV: ${escapeHtml(downloads.csv || "-")} · Manifest: ${escapeHtml(downloads.manifest || "-")}</small></div>
-      <div class="mini-row column"><span>Storage</span><small>${escapeHtml(data.snapshot?.snapshot_dir || data.storage?.exports_latest || data.path || "-")}</small></div>
-      <div class="mini-row"><span>Train stroke</span><small>${ready.ready_stroke ? "ready" : "cần thêm mẫu/lớp"}</small></div>
-    `;
     await refreshProfileAndLeaderboard();
     renderProfile();
+    setStatus(`Đã export & lưu ${data.samples || 0} mẫu, ${data.classes || 0} lớp.`, "ok");
   } catch (err) {
-    box.innerHTML = `<div class="mini-row"><span>Export lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    setStatus("Export lỗi: " + err.message, "warn");
   }
 }
 
 async function startRetrain(mode) {
-  const box = $("#retrainBox");
+  // Chạy im lặng: bắt đầu train & tự lưu, không đổ log ra panel.
   const form = new FormData();
   form.append("mode", mode);
   form.append("epochs", mode === "stroke" ? "8" : "5");
   state.imageModelReloaded = false;
+  setStatus(`Đang train ${mode}...`, "");
   try {
     const data = await apiPostForm("/admin/retrain/start", form);
-    box.innerHTML = `<div class="mini-row"><span>Retrain ${escapeHtml(mode)}</span><small>${data.ok ? `running · pid ${data.pid}` : "busy"}</small></div>`;
-    setTimeout(refreshRetrainStatus, 1200);
+    setStatus(data.ok ? `Đã bắt đầu train ${mode}.` : "Hệ thống đang bận train.", data.ok ? "ok" : "warn");
+    setTimeout(refreshRetrainStatus, 1500);
   } catch (err) {
-    box.innerHTML = `<div class="mini-row column"><span>Retrain lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    setStatus("Train lỗi: " + err.message, "warn");
   }
 }
 
@@ -1777,87 +1798,48 @@ async function reloadImageModel() {
 }
 
 async function refreshRetrainStatus() {
-  const box = $("#retrainBox");
-  if (!box) return;
+  // Theo dõi train ngầm để tự reload model khi xong, KHÔNG đổ log ra panel.
   try {
     const data = await apiGet("/admin/retrain/status");
     state.retrainStatus = data;
-    const ready = data.training_readiness || {};
-    const jobs = data.recent_jobs || [];
-    const logTail = data.log_tail
-      ? `<pre class="log-tail">${escapeHtml(data.log_tail)}</pre>`
-      : "";
-    const jobRows = jobs
-      .slice(0, 2)
-      .map(
-        (j) =>
-          `<div class="mini-row"><span>#${j.id} ${escapeHtml(j.mode)}</span><small>${escapeHtml(j.status)} · ${j.samples || 0} mẫu</small></div>`,
-      )
-      .join("");
-    box.innerHTML = `
-      <div class="mini-row"><span>${escapeHtml(data.status || "idle")}</span><small>${escapeHtml(data.mode || "-")} · ${data.process_running ? "running" : "stopped"}</small></div>
-      <div class="mini-row column"><span>${escapeHtml(data.message || "")}</span><small>samples ${ready.total_samples || 0}, classes ${ready.classes || 0}, min/class ${ready.min_samples_per_class || 0}</small></div>
-      <div class="mini-row column"><span>Storage</span><small>${escapeHtml(data.storage?.base || data.job_dir || "data/self_improving_loop")}</small></div>
-      ${jobRows}
-      ${logTail}
-    `;
-    if (data.status === "done" && data.mode === "image" && data.self_improved_model_exists && !state.imageModelReloaded) {
-      await reloadImageModel();
+    if (data.status === "done") {
+      if (data.mode === "image" && data.self_improved_model_exists && !state.imageModelReloaded) {
+        await reloadImageModel();
+      }
+      setStatus(`Train ${data.mode || ""} xong & đã lưu.`, "ok");
     }
     if (data.process_running) setTimeout(refreshRetrainStatus, 2500);
   } catch (err) {
-    box.innerHTML = `<div class="mini-row"><span>Status lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    // im lặng
   }
 }
 
 
 
 async function showPanelStorage(section = "") {
+  // Theo yêu cầu: bấm nút chỉ tự động lưu dữ liệu, KHÔNG hiển thị log/danh sách file.
   const box = $("#panelStorageBox");
-  if (!box) return;
-  const title = section === "real_image_after_draw" ? "Hình thật sau khi vẽ" : "Tất cả panel";
+  if (box) box.innerHTML = "";
   try {
-    const qs = section ? `?section=${encodeURIComponent(section)}&limit=8` : "?limit=10";
-    const data = await apiGet(`/admin/panel-storage${qs}`);
-    const storage = data.storage || {};
-    const files = (data.recent_files || []).slice(0, section ? 6 : 8);
-    const countText = storage.counts
-      ? Object.entries(storage.counts)
-          .map(([key, value]) => `${key}: ${value}`)
-          .join(" · ")
-      : "";
-    const fileRows = files
-      .map((f) => `<div class="mini-row column"><span>${escapeHtml(f.relative || f.name || "file")}</span><small>${Math.round((f.size_bytes || 0) / 1024)} KB · ${escapeHtml(f.path || "")}</small></div>`)
-      .join("");
-    box.innerHTML = `
-      <div class="mini-row column"><span>Storage ${escapeHtml(title)}</span><small>${escapeHtml(section ? storage[section] || storage.real_image_after_draw || "-" : storage.base || "-")}</small></div>
-      ${countText ? `<div class="mini-row column"><span>Số file</span><small>${escapeHtml(countText)}</small></div>` : ""}
-      ${fileRows || `<div class="mini-row"><span>Chưa có file</span><small>Bấm Sinh hình thật / Nhận diện / chơi game để tự lưu</small></div>`}
-    `;
+    const qs = section ? `?section=${encodeURIComponent(section)}&limit=1` : "?limit=1";
+    await apiGet(`/admin/panel-storage${qs}`); // chạm endpoint để chắc chắn dữ liệu đã được ghi
   } catch (err) {
-    box.innerHTML = `<div class="mini-row"><span>Storage lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    // im lặng, không hiển thị log lỗi ra panel
   }
+  setStatus(
+    section === "real_image_after_draw" ? "Đã lưu dữ liệu hình thật." : "Đã lưu toàn bộ dữ liệu panel.",
+    "ok",
+  );
 }
 
 async function showSelfLoopStorage() {
-  const box = $("#retrainBox");
-  if (!box) return;
+  // Bấm là tự lưu, không hiển thị log.
   try {
-    const data = await apiGet("/admin/self-improve/storage");
-    const storage = data.storage || {};
-    const files = (data.recent_files || []).slice(0, 5);
-    const fileRows = files
-      .map((f) => `<div class="mini-row"><span>${escapeHtml(f.relative || f.name || "file")}</span><small>${Math.round((f.size_bytes || 0) / 1024)} KB</small></div>`)
-      .join("");
-    box.innerHTML = `
-      <div class="mini-row column"><span>Self-improving storage</span><small>${escapeHtml(storage.base || "-")}</small></div>
-      <div class="mini-row column"><span>Samples log</span><small>${escapeHtml(storage.samples || "-")}</small></div>
-      <div class="mini-row column"><span>Latest export</span><small>${escapeHtml(storage.exports_latest || "-")}</small></div>
-      ${fileRows || `<div class="mini-row"><span>Chưa có file mới</span><small>hãy lưu mẫu/export/train</small></div>`}
-    `;
+    await apiGet("/admin/self-improve/storage");
   } catch (err) {
-    box.innerHTML = `<div class="mini-row"><span>Storage lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    // im lặng
   }
+  setStatus("Đã lưu dữ liệu self-improving loop.", "ok");
 }
 
 
@@ -1975,9 +1957,13 @@ async function ensureHandsReady() {
   });
   state.hands.setOptions({
     maxNumHands: 1,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.65,
-    minTrackingConfidence: 0.6,
+    // modelComplexity 0 = nhẹ & nhanh hơn nhiều trên trình duyệt -> nhiều khung
+    // hình/giây hơn -> nét vẽ liền mạch, ít đứt khúc.
+    modelComplexity: 0,
+    // Hạ ngưỡng tracking để MediaPipe duy trì bám ngón tay liên tục giữa các
+    // khung (ít mất tay giữa chừng -> ít gãy nét).
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.4,
   });
   state.hands.onResults(onHandResults);
   return true;
@@ -2152,9 +2138,11 @@ function stopCamera() {
   $("#faceCanvas")?.getContext("2d")?.clearRect(0, 0, CANVAS_W, CANVAS_H);
   state.faceDrawingActive = false;
   state.faceFilteredPoint = null;
+  if (typeof resetFaceEuro === "function") resetFaceEuro();
   state.faceCenter = null;
   state.faceStatus = null;
   state.filteredPoint = null;
+  if (typeof resetHandEuro === "function") resetHandEuro();
   state.penLiftFrames = 0;
   state.lastMid = null;
   clearFaceOverlay();
@@ -2280,22 +2268,25 @@ function mapFacePointToCanvas(nose) {
   };
 }
 
-function smoothFacePoint(point) {
-  if (!state.faceFilteredPoint) {
-    state.faceFilteredPoint = point;
-    return point;
+function ensureFaceEuro() {
+  if (!state.faceEuroX) {
+    // beta nhỏ hơn tay một chút vì cử động đầu chậm hơn -> mượt hơn.
+    state.faceEuroX = makeOneEuro({ minCutoff: 1.0, beta: 0.01 });
+    state.faceEuroY = makeOneEuro({ minCutoff: 1.0, beta: 0.01 });
   }
-  const dx = point.x - state.faceFilteredPoint.x;
-  const dy = point.y - state.faceFilteredPoint.y;
-  const dist = Math.hypot(dx, dy);
-  const alpha = Math.min(0.82, Math.max(0.22, dist / 120));
-  state.faceFilteredPoint = {
-    x: state.faceFilteredPoint.x + dx * alpha,
-    y: state.faceFilteredPoint.y + dy * alpha,
+}
+function resetFaceEuro() {
+  if (state.faceEuroX) state.faceEuroX.reset();
+  if (state.faceEuroY) state.faceEuroY.reset();
+}
+function smoothFacePoint(point) {
+  ensureFaceEuro();
+  return {
+    x: state.faceEuroX.filter(point.x, point.t),
+    y: state.faceEuroY.filter(point.y, point.t),
     t: point.t,
     source: "face-nose",
   };
-  return state.faceFilteredPoint;
 }
 
 function drawFaceOverlay(ctx, landmarks, metrics) {
@@ -2347,11 +2338,24 @@ function onHandResults(results) {
     return;
   }
   drawHandSkeleton(ctx, landmarks);
+  const wrist = landmarks[0];
   const index = landmarks[8];
   const indexPip = landmarks[6];
-  const indexUp = index.y < indexPip.y;
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  // Phát hiện "ngón trỏ duỗi để vẽ" KHÔNG phụ thuộc hướng tay (xoay ngang vẫn
+  // đúng): so sánh khoảng cách đầu ngón -> cổ tay với khớp PIP -> cổ tay.
+  //  - Ngón duỗi: đầu ngón ở xa cổ tay hơn PIP  -> ratio > 1.
+  //  - Ngón gập (nhấc bút): đầu ngón co lại gần lòng bàn tay -> ratio nhỏ.
+  // Hysteresis: bắt đầu vẽ cần duỗi rõ; ngừng khi gập rõ -> nét vừa liền vừa
+  // tách bạch đúng lúc nhấc tay.
+  const ratio = dist(index, wrist) / Math.max(1e-4, dist(indexPip, wrist));
+  const DOWN_ON = 1.18;   // duỗi rõ mới bắt đầu nét mới
+  const DOWN_OFF = 1.04;  // co lại quá mức này -> nhấc bút (tách nét)
+  const wasDrawing = Boolean(state.currentStroke);
+  const indexUp = wasDrawing ? ratio > DOWN_OFF : ratio > DOWN_ON;
+  // Xòe cả bàn tay để xóa: 4 đầu ngón đều xa cổ tay (rotation-invariant).
   const openPalm = [8, 12, 16, 20].every(
-    (tipIdx) => landmarks[tipIdx].y < landmarks[tipIdx - 2].y,
+    (tip) => dist(landmarks[tip], wrist) > dist(landmarks[tip - 2], wrist) * 1.1,
   );
   const now = Date.now();
   if (openPalm && now - state.lastPalmClear > 1600) {
@@ -2362,6 +2366,9 @@ function onHandResults(results) {
   }
   if (!state.running && !state.currentTarget) return;
   if (!indexUp) {
+    // Vẫn hiển thị con trỏ (rỗng) để người dùng ngắm vị trí trước khi hạ bút vẽ.
+    drawPenCursor(ctx, (1 - index.x) * CANVAS_W, index.y * CANVAS_H, false);
+    state.lastRawHand = null;
     liftPenDebounced();
     return;
   }
@@ -2372,28 +2379,117 @@ function onHandResults(results) {
     y: index.y * CANVAS_H,
     t: performance.now(),
   };
+  // Tách nét trên toạ độ THÔ: nếu đầu ngón nhảy xa (nhấc tay đổi vị trí) thì
+  // kết thúc nét cũ và reset bộ lọc -> nét mới bắt đầu sạch, không bị kéo nối.
+  if (state.currentStroke && state.lastRawHand) {
+    const jump = Math.hypot(raw.x - state.lastRawHand.x, raw.y - state.lastRawHand.y);
+    if (jump > 150) {
+      endStroke();
+      resetHandEuro();
+    }
+  }
+  state.lastRawHand = { x: raw.x, y: raw.y };
   const p = smoothPoint(raw);
+  drawPenCursor(ctx, p.x, p.y, true);
   if (!state.currentStroke) beginStroke(p);
   else extendStroke(p);
 }
 
+// Vẽ con trỏ bút ở đầu ngón trỏ để người dùng biết CHÍNH XÁC điểm sẽ vẽ và
+// trạng thái bút (đang vẽ = xanh đặc, đang nhấc = viền vàng rỗng).
+function drawPenCursor(ctx, x, y, drawing) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, 9, 0, Math.PI * 2);
+  if (drawing) {
+    ctx.fillStyle = "rgba(85, 230, 165, 0.95)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.stroke();
+  } else {
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "rgba(255, 207, 87, 0.95)";
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // Chỉ thực sự kết thúc nét khi ngón trỏ hạ/mất tay LIÊN TỤC đủ lâu, tránh đứt
 // nét do nhiễu nhận diện ở từng frame riêng lẻ.
-const PEN_LIFT_FRAMES = 5;
+const PEN_LIFT_FRAMES = 4;
 function liftPenDebounced() {
   if (!state.currentStroke) return;
   state.penLiftFrames = (state.penLiftFrames || 0) + 1;
   if (state.penLiftFrames >= PEN_LIFT_FRAMES) {
     endStroke();
     state.penLiftFrames = 0;
-    if (state.cameraTool === "face") state.faceFilteredPoint = null;
-    else state.filteredPoint = null;
+    state.lastRawHand = null;
+    if (state.cameraTool === "face") {
+      state.faceFilteredPoint = null;
+      resetFaceEuro();
+    } else {
+      state.filteredPoint = null;
+      resetHandEuro();
+    }
   }
 }
 
-// Làm mượt thích ứng (adaptive EMA): di chuyển NHANH -> bám sát (ít trễ); di
-// chuyển CHẬM -> mượt hơn (ít rung). Giúp nét vừa liền vừa đỡ "lệch".
+// ---------------------------------------------------------------------------
+// Bộ lọc One-Euro: tiêu chuẩn vàng cho vẽ bằng ngón tay/camera.
+//  - Khi tay đứng yên/đi chậm: lọc mạnh -> hết rung, nét mượt.
+//  - Khi tay di nhanh: giảm lọc -> bám sát, ít trễ -> vẽ đúng hình mong muốn.
+// ---------------------------------------------------------------------------
+function makeOneEuro({ minCutoff = 1.2, beta = 0.015, dCutoff = 1.0 } = {}) {
+  let xPrev = null;
+  let dxPrev = 0;
+  let tPrev = null;
+  const alpha = (cutoff, dt) => {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  };
+  return {
+    reset() { xPrev = null; dxPrev = 0; tPrev = null; },
+    filter(x, t) {
+      if (tPrev === null) { tPrev = t; xPrev = x; dxPrev = 0; return x; }
+      let dt = (t - tPrev) / 1000;
+      if (!(dt > 0)) dt = 1 / 60;
+      tPrev = t;
+      const dx = (x - xPrev) / dt;
+      const aD = alpha(dCutoff, dt);
+      const dxHat = aD * dx + (1 - aD) * dxPrev;
+      dxPrev = dxHat;
+      const cutoff = minCutoff + beta * Math.abs(dxHat);
+      const a = alpha(cutoff, dt);
+      const xHat = a * x + (1 - a) * xPrev;
+      xPrev = xHat;
+      return xHat;
+    },
+  };
+}
+
+function ensureHandEuro() {
+  if (!state.euroX) {
+    state.euroX = makeOneEuro({ minCutoff: 1.2, beta: 0.015 });
+    state.euroY = makeOneEuro({ minCutoff: 1.2, beta: 0.015 });
+  }
+}
+function resetHandEuro() {
+  if (state.euroX) state.euroX.reset();
+  if (state.euroY) state.euroY.reset();
+}
+
+// Làm mượt điểm ngón trỏ bằng One-Euro (thay cho EMA cũ).
 function smoothPoint(point) {
+  ensureHandEuro();
+  return {
+    x: state.euroX.filter(point.x, point.t),
+    y: state.euroY.filter(point.y, point.t),
+    t: point.t,
+  };
+}
+
+function smoothPoint_legacy_unused(point) {
   if (!state.filteredPoint) {
     state.filteredPoint = point;
     return point;

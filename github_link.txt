@@ -1,0 +1,19 @@
+# AirDrawVocab — Deep Learning Capstone Project
+
+Đề tài : Học tiếng Anh qua vẽ hình trực tuyến, nhận diện bằng AI (AirDrawVocab)
+Học phần: Mạng nơron và Học sâu (Deep Learning)
+Nhóm   : 1
+Thành viên:
+  - 22010144 — Hoàng Quốc Mạnh
+  - 22010283 — Nguyễn Hữu Vinh
+GVHD   : TS. Đặng Thị Thúy An
+
+Repository GitHub : (điền link repo trước khi nộp, ví dụ) https://github.com/<username>/AirDrawVocab
+Dataset           : Google QuickDraw — https://quickdraw.withgoogle.com/data
+                    (19 lớp dùng trong project, file .npy đặt tại data/npy_28/)
+Demo (nếu có)     : (điền link video/demo trước khi nộp)
+
+Ghi chú:
+- Model chính: models/airdrawvocab_best_advanced.keras (VGG-style CNN, 19 lớp).
+- Kết quả benchmark tái lập: assets/reports/benchmark_runs/ (comparison.csv + figs/).
+- Chạy lại so sánh kiến trúc: python src/training/run_comparison.py <ModelName> <epochs>

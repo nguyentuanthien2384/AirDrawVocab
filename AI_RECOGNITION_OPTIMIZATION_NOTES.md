@@ -97,7 +97,7 @@ Chế độ chơi nhiều người theo phòng. Bấm Join sẽ mở WebSocket v
 
 Bấm các nút này không "gen ảnh kết quả". Chúng thao tác với dữ liệu/model:
 
-- Export tạo file dataset trong `data/self_improve_export`.
+- Export tạo file dataset trong `data/self_improving_loop/exports/latest`.
 - Train stroke tạo `models/stroke_sequence_model.keras`.
 - Train image tạo `models/airdrawvocab_self_improved.keras`, sau đó frontend có thể reload model mới.
 

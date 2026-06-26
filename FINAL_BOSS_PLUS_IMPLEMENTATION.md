@@ -6,7 +6,7 @@ Bản này tích hợp nốt các phần còn thiếu trong kiến trúc Final B
 
 Đã thêm:
 
-- `GET /dataset/export`: export toàn bộ stroke_samples sang `data/self_improve_export/stroke_samples.jsonl`.
+- `GET /dataset/export`: export toàn bộ stroke_samples sang `data/self_improving_loop/exports/latest/stroke_samples.jsonl`.
 - `GET /dataset/download/stroke_samples.jsonl`: tải dataset export.
 - `POST /admin/retrain/start`: chạy retrain local bằng subprocess.
 - `GET /admin/retrain/status`: xem trạng thái retrain.

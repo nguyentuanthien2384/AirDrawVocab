@@ -62,6 +62,14 @@ const state = {
   referenceImageInFlight: false,
   referenceImageRequestId: 0,
   referenceImageMessage: "Bấm Sinh hình thật sau khi vẽ xong để tạo ảnh.",
+  liveRefreshId: null,
+  proStatusId: null,
+  autoRetrain: false,
+  autoRetrainId: null,
+  autoRetrainBaseline: null,
+  soundOn: true,
+  learnedWords: [],
+  lastCanvasSnapshot: null,
 };
 
 const CANVAS_W = 960;
@@ -138,7 +146,7 @@ function renderLogin(message = "") {
             <h1>AirDrawVocab</h1>
           </div>
         </div>
-        <p class="login-subtitle">Đăng nhập để vào thẳng màn chơi. Không có dashboard phụ, không có giao diện người dùng thừa ở bên cạnh.</p>
+
         <form id="loginForm" class="login-form">
           <label>Tài khoản
             <input id="username" autocomplete="username" placeholder="VD: admin" required />
@@ -278,6 +286,14 @@ function renderGameShell() {
               <div class="tool-chip">Bút: <strong id="toolChip">tay/ngón trỏ</strong></div>
               <div class="face-chip">Mặt: <strong id="faceChip">tắt</strong></div>
             </div>
+            <div id="hintOverlay" class="hint-overlay" hidden></div>
+            <div id="predictOverlay" class="predict-overlay" hidden>
+              <div class="predict-overlay-icon" id="predictOverlayIcon"></div>
+              <div class="predict-overlay-text">
+                <strong id="predictOverlayLabel">---</strong>
+                <small id="predictOverlayConf"></small>
+              </div>
+            </div>
             <div id="correctFlash" class="correct-flash">Correct +Score</div>
           </div>
 
@@ -285,6 +301,7 @@ function renderGameShell() {
             <div class="control-row">
               <button id="startBtn" class="primary">Bắt đầu</button>
               <button id="clearBtn" class="secondary">Xóa nét</button>
+              <button id="undoClearBtn" class="secondary" type="button" disabled>Hoàn tác xóa</button>
               <button id="skipBtn" class="secondary" disabled>Bỏ qua</button>
               <button id="recognizeBtn" class="primary" type="button" disabled>Nhận diện</button>
               <button id="generateImageBtn" class="secondary" type="button" disabled>Sinh hình thật</button>
@@ -302,6 +319,7 @@ function renderGameShell() {
             <h2 id="targetWord" class="target-word">---</h2>
             <div id="wordMeta" class="word-meta">${recognitionNote || "Chưa bắt đầu game."}</div>
             <button id="speakBtn" class="ghost">Đọc từ / ví dụ</button>
+            <button id="soundToggleBtn" class="ghost">Âm thanh: Bật</button>
           </section>
 
           <section class="side-card">
@@ -351,6 +369,12 @@ function renderGameShell() {
           </section>
 
           <section class="side-card">
+            <div class="side-header"><h3>Ôn tập từ hay sai</h3><span class="badge">Review</span></div>
+            <div id="reviewBox" class="mini-list"></div>
+            <button id="practiceWeakBtn" class="ghost" type="button" disabled>Luyện ngay các từ yếu</button>
+          </section>
+
+          <section class="side-card">
             <div class="side-header"><h3>Self-improving Loop</h3><span class="badge">Train</span></div>
             <div class="pvp-controls four">
               <button id="exportDatasetBtn" class="secondary" type="button">Export data</button>
@@ -358,6 +382,7 @@ function renderGameShell() {
               <button id="trainImageBtn" class="secondary" type="button">Train image</button>
               <button id="storageBtn" class="secondary" type="button">Storage</button>
             </div>
+            <button id="autoRetrainBtn" class="ghost" type="button">Auto-retrain: Tắt</button>
             <div id="retrainBox" class="mini-list"><div class="mini-row"><span>Idle</span><small>Local/Colab pipeline</small></div></div>
           </section>
 
@@ -382,9 +407,11 @@ function renderGameShell() {
   updateReferenceImagePanel();
   renderProfile();
   renderLeaderboard();
+  renderReviewPanel();
   renderPvp();
   refreshRetrainStatus();
   refreshProStatus();
+  startProStatusLoop();
 }
 
 function wireGameEvents() {
@@ -398,12 +425,23 @@ function wireGameEvents() {
     state.running ? endGame("Bạn đã kết thúc lượt chơi.") : startGame(),
   );
   $("#clearBtn").addEventListener("click", clearDrawing);
+  $("#undoClearBtn")?.addEventListener("click", undoClear);
+  $("#soundToggleBtn")?.addEventListener("click", toggleSound);
+  $("#autoRetrainBtn")?.addEventListener("click", toggleAutoRetrain);
+  $("#practiceWeakBtn")?.addEventListener("click", practiceWeakWords);
   $("#skipBtn").addEventListener("click", skipRound);
   $("#recognizeBtn").addEventListener("click", manualRecognizeDrawing);
-  $("#generateImageBtn")?.addEventListener("click", manualGenerateReferenceImage);
-  $("#realImageStorageBtn")?.addEventListener("click", () => showPanelStorage("real_image_after_draw"));
+  $("#generateImageBtn")?.addEventListener(
+    "click",
+    manualGenerateReferenceImage,
+  );
+  $("#realImageStorageBtn")?.addEventListener("click", () =>
+    showPanelStorage("real_image_after_draw"),
+  );
   $("#panelStorageBtn")?.addEventListener("click", () => showPanelStorage(""));
-  $("#saveBtn").addEventListener("click", () => saveStrokeSample(Boolean(state.prediction?.is_correct), true));
+  $("#saveBtn").addEventListener("click", () =>
+    saveStrokeSample(Boolean(state.prediction?.is_correct), true),
+  );
   $("#speakBtn").addEventListener("click", speakCurrentWord);
   $("#pvpBtn").addEventListener("click", togglePvp);
   $("#exportDatasetBtn").addEventListener("click", exportDataset);
@@ -416,7 +454,6 @@ function wireGameEvents() {
   updateCameraToolUI();
 }
 
-
 function currentInputMode() {
   return state.mode === "camera" ? `camera-${state.cameraTool}` : state.mode;
 }
@@ -424,14 +461,17 @@ function currentInputMode() {
 function cameraInstruction() {
   return state.cameraTool === "face"
     ? "Bút mặt/mũi: há miệng nhẹ để vẽ bằng mũi, ngậm miệng để nhấc bút, chớp cả hai mắt để xóa. Nút Quét nét mặt sẽ chuyển khuôn mặt hiện tại thành stroke."
-    : "Bút tay: giơ ngón trỏ để vẽ, xòe bàn tay để xóa nét.";
+    : "Bút tay: giơ ngón trỏ để vẽ · giơ 3 ngón (trỏ+giữa+áp út) để NHẬN DIỆN · xòe cả bàn tay để xóa nét.";
 }
 
 function cameraFaceLabel() {
   if (state.cameraTool !== "face") return "chờ";
   if (state.faceAnalyzeInFlight) return "đang quét mặt";
   if (state.faceDrawingActive) return "đang vẽ bằng mũi";
-  if (state.faceStatus?.faceDetected) return state.faceStatus.ready ? state.faceStatus.status || "mặt sẵn sàng" : state.faceStatus.status || "chỉnh mặt";
+  if (state.faceStatus?.faceDetected)
+    return state.faceStatus.ready
+      ? state.faceStatus.status || "mặt sẵn sàng"
+      : state.faceStatus.status || "chỉnh mặt";
   return "chưa thấy mặt";
 }
 
@@ -446,12 +486,17 @@ function updateCameraToolUI() {
   stage?.classList.toggle("hand-tracking", state.cameraTool === "hand");
   if (snapBtn) {
     snapBtn.disabled = state.mode !== "camera" || state.faceAnalyzeInFlight;
-    snapBtn.textContent = state.faceAnalyzeInFlight ? "Đang quét..." : "Quét nét mặt";
+    snapBtn.textContent = state.faceAnalyzeInFlight
+      ? "Đang quét..."
+      : "Quét nét mặt";
   }
   const toolChip = $("#toolChip");
-  if (toolChip) toolChip.textContent = state.cameraTool === "face" ? "mặt/mũi" : "tay/ngón trỏ";
+  if (toolChip)
+    toolChip.textContent =
+      state.cameraTool === "face" ? "mặt/mũi" : "tay/ngón trỏ";
   const faceChip = $("#faceChip");
-  if (faceChip) faceChip.textContent = state.mode === "camera" ? cameraFaceLabel() : "tắt";
+  if (faceChip)
+    faceChip.textContent = state.mode === "camera" ? cameraFaceLabel() : "tắt";
 }
 
 async function setCameraTool(tool) {
@@ -472,7 +517,11 @@ async function setCameraTool(tool) {
     const ok = await startCamera();
     if (ok) setStatus(cameraInstruction(), "ok");
   } else {
-    setStatus(state.cameraTool === "face" ? "Đã chọn bút mặt/mũi. Chuyển sang chế độ camera để dùng." : "Đã chọn bút tay/ngón trỏ.");
+    setStatus(
+      state.cameraTool === "face"
+        ? "Đã chọn bút mặt/mũi. Chuyển sang chế độ camera để dùng."
+        : "Đã chọn bút tay/ngón trỏ.",
+    );
   }
 }
 
@@ -562,8 +611,13 @@ function endStroke() {
   state.currentStroke = null;
   state.lastPoint = null;
   updateRecognizeButton();
-  if (state.hasDrawn && !state.referenceImage && !state.referenceImageInFlight) {
-    state.referenceImageMessage = "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
+  if (
+    state.hasDrawn &&
+    !state.referenceImage &&
+    !state.referenceImageInFlight
+  ) {
+    state.referenceImageMessage =
+      "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
     updateReferenceImagePanel();
   }
 }
@@ -580,7 +634,6 @@ function drawSegment(a, b) {
   ctx.stroke();
   state.lastMid = mid;
 }
-
 
 function clearFaceOverlay() {
   const face = $("#faceCanvas");
@@ -601,10 +654,14 @@ function captureVideoFrameBlob(video, targetWidth = 640) {
     temp.height = Math.max(1, Math.round(srcH * scale));
     const ctx = temp.getContext("2d");
     ctx.drawImage(video, 0, 0, temp.width, temp.height);
-    temp.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new Error("Không chụp được khung hình camera."));
-    }, "image/jpeg", 0.78);
+    temp.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Không chụp được khung hình camera."));
+      },
+      "image/jpeg",
+      0.78,
+    );
   });
 }
 
@@ -644,11 +701,15 @@ function drawDetectedFaceOverlay(data) {
   if (box) {
     ctx.strokeStyle = "rgba(87, 167, 255, 0.92)";
     ctx.lineWidth = 3;
-    ctx.strokeRect(Number(box.x || 0), Number(box.y || 0), Number(box.width || 0), Number(box.height || 0));
+    ctx.strokeRect(
+      Number(box.x || 0),
+      Number(box.y || 0),
+      Number(box.width || 0),
+      Number(box.height || 0),
+    );
   }
   ctx.restore();
 }
-
 
 function chainToStroke(landmarks, indices, source, tOffset = 0) {
   const stroke = [];
@@ -681,17 +742,53 @@ function makeFaceMeshSketchData(results) {
   }
 
   const chains = [
-    { source: "face-mesh-oval", idx: [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10] },
+    {
+      source: "face-mesh-oval",
+      idx: [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365,
+        379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234,
+        127, 162, 21, 54, 103, 67, 109, 10,
+      ],
+    },
     { source: "face-mesh-left-brow", idx: [70, 63, 105, 66, 107] },
     { source: "face-mesh-right-brow", idx: [336, 296, 334, 293, 300] },
-    { source: "face-mesh-left-eye", idx: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33] },
-    { source: "face-mesh-right-eye", idx: [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466, 263] },
-    { source: "face-mesh-nose", idx: [168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 98, 327, 2] },
-    { source: "face-mesh-mouth", idx: [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61] },
-    { source: "face-mesh-lip-inner", idx: [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191, 78] },
+    {
+      source: "face-mesh-left-eye",
+      idx: [
+        33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161,
+        246, 33,
+      ],
+    },
+    {
+      source: "face-mesh-right-eye",
+      idx: [
+        263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387,
+        388, 466, 263,
+      ],
+    },
+    {
+      source: "face-mesh-nose",
+      idx: [168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 98, 327, 2],
+    },
+    {
+      source: "face-mesh-mouth",
+      idx: [
+        61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267,
+        0, 37, 39, 40, 185, 61,
+      ],
+    },
+    {
+      source: "face-mesh-lip-inner",
+      idx: [
+        78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312,
+        13, 82, 81, 80, 191, 78,
+      ],
+    },
   ];
   const strokes = chains
-    .map((chain, i) => chainToStroke(landmarks, chain.idx, chain.source, i * 180))
+    .map((chain, i) =>
+      chainToStroke(landmarks, chain.idx, chain.source, i * 180),
+    )
     .filter((stroke) => stroke.length >= 2);
   const xs = landmarks.map((p) => (1 - p.x) * CANVAS_W);
   const ys = landmarks.map((p) => p.y * CANVAS_H);
@@ -732,11 +829,13 @@ function handleFaceMeshUnifiedResults(results) {
 }
 
 function hasFaceStrokesInDrawing() {
-  return getAllCurrentStrokes().some((stroke) =>
-    Array.isArray(stroke) && stroke.some((point) => {
-      const source = String(point?.source || "");
-      return source.startsWith("face-") || source.includes("camera-face");
-    }),
+  return getAllCurrentStrokes().some(
+    (stroke) =>
+      Array.isArray(stroke) &&
+      stroke.some((point) => {
+        const source = String(point?.source || "");
+        return source.startsWith("face-") || source.includes("camera-face");
+      }),
   );
 }
 
@@ -770,7 +869,8 @@ function drawStrokeListToCanvas(strokes, source = "camera-face-sketch") {
     state.hasDrawn = true;
     updateRecognizeButton();
     if (!state.referenceImage && !state.referenceImageInFlight) {
-      state.referenceImageMessage = "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
+      state.referenceImageMessage =
+        "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
       updateReferenceImagePanel();
     }
   }
@@ -794,7 +894,8 @@ async function scanFaceSketch(auto = false) {
   state.faceAnalyzeInFlight = true;
   state.faceStatus = { faceDetected: true, ready: false, status: "đang quét" };
   updateCameraToolUI();
-  if (!auto) setStatus("Đang quét khuôn mặt trong khung camera để tạo nét vẽ...");
+  if (!auto)
+    setStatus("Đang quét khuôn mặt trong khung camera để tạo nét vẽ...");
   try {
     let data = freshFaceMeshSketch();
     if (!data && state.faceMesh) {
@@ -814,13 +915,17 @@ async function scanFaceSketch(auto = false) {
     }
     drawDetectedFaceOverlay(data);
     if (!data?.face_detected || !(data.strokes || []).length) {
-      const message = data?.message || "Chưa nhận diện được nét mặt. Hãy nhìn thẳng camera và tăng ánh sáng.";
+      const message =
+        data?.message ||
+        "Chưa nhận diện được nét mặt. Hãy nhìn thẳng camera và tăng ánh sáng.";
       state.faceStatus = { faceDetected: false, ready: false, status: message };
       updateCameraToolUI();
       if (!auto) setStatus(message, "error");
       return;
     }
-    const source = String(data.detector || "").includes("facemesh") ? "face-mesh-sketch" : "camera-face-sketch";
+    const source = String(data.detector || "").includes("facemesh")
+      ? "face-mesh-sketch"
+      : "camera-face-sketch";
     const added = drawStrokeListToCanvas(data.strokes, source);
     state.faceStatus = {
       faceDetected: true,
@@ -829,18 +934,29 @@ async function scanFaceSketch(auto = false) {
     };
     updateCameraToolUI();
     if (added > 0) {
-      setStatus(`Đã thêm ${added} nét khuôn mặt vào canvas vẽ (${escapeHtml(data.detector || "camera")}).`, "ok");
+      setStatus(
+        `Đã thêm ${added} nét khuôn mặt vào canvas vẽ (${escapeHtml(data.detector || "camera")}).`,
+        "ok",
+      );
       updateRecognizeButton();
       if (!state.referenceImage && !state.referenceImageInFlight) {
-        state.referenceImageMessage = "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
+        state.referenceImageMessage =
+          "Đã có nét vẽ. Bấm Sinh hình thật để tạo ảnh tham khảo.";
         updateReferenceImagePanel();
       }
     } else if (!auto) {
-      setStatus("Đã thấy mặt nhưng nét sinh ra quá nhỏ/ít. Hãy đưa mặt gần camera hơn.", "error");
+      setStatus(
+        "Đã thấy mặt nhưng nét sinh ra quá nhỏ/ít. Hãy đưa mặt gần camera hơn.",
+        "error",
+      );
     }
   } catch (err) {
     clearFaceOverlay();
-    state.faceStatus = { faceDetected: false, ready: false, status: err.message };
+    state.faceStatus = {
+      faceDetected: false,
+      ready: false,
+      status: err.message,
+    };
     updateCameraToolUI();
     if (!auto) setStatus(err.message, "error");
   } finally {
@@ -849,9 +965,18 @@ async function scanFaceSketch(auto = false) {
   }
 }
 
-
 function clearDrawing() {
   const draw = $("#drawCanvas");
+  // Lưu ảnh nét hiện tại trước khi xóa -> cho phép Hoàn tác nếu xóa nhầm.
+  if (state.hasDrawn) {
+    try {
+      state.lastCanvasSnapshot = draw.toDataURL("image/png");
+      const undoBtn = $("#undoClearBtn");
+      if (undoBtn) undoBtn.disabled = false;
+    } catch {
+      state.lastCanvasSnapshot = null;
+    }
+  }
   draw.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
   const hand = $("#handCanvas");
   hand.getContext("2d").clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -868,7 +993,9 @@ function clearDrawing() {
   state.consecutiveCorrect = 0;
   state.prediction = null;
   state.judge = null;
-  resetReferenceImage("Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.");
+  resetReferenceImage(
+    "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.",
+  );
   updatePredictionPanel(null);
   updateJudge(null);
   $("#aiChip").textContent = "---";
@@ -901,8 +1028,21 @@ async function setMode(mode) {
     stopCamera();
     setStatus("Chế độ vẽ chuột: vẽ trực tiếp trên canvas trắng.");
   }
+  applyStrokeStyleForMode();
+  updatePredictOverlay(state.mode === "camera" ? state.prediction : null);
 }
 
+// Đổi màu nét theo chế độ: camera -> CYAN sáng nổi trên hình camera (giống bản
+// desktop tham chiếu trong PDF); chuột -> đen trên nền trắng. Màu chỉ để HIỂN
+// THỊ, ảnh gửi cho AI luôn được chuẩn hóa về đen-trắng (xem captureDrawingBlob).
+function applyStrokeStyleForMode() {
+  const ctx = $("#drawCanvas")?.getContext("2d");
+  if (!ctx) return;
+  ctx.lineWidth = 13;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = state.mode === "camera" ? "#19e6ff" : "#050505";
+}
 
 function shuffle(items) {
   const arr = [...items];
@@ -926,6 +1066,7 @@ async function startGame() {
   state.bestStreak = 0;
   state.correct = 0;
   state.attempts = 0;
+  state.learnedWords = [];
   state.startedAt = Date.now();
   state.gamePool = shuffle(
     state.supportedVocab.length ? state.supportedVocab : state.vocab,
@@ -936,6 +1077,7 @@ async function startGame() {
   nextRound();
   startGameTimer();
   startRealtimeAI();
+  startLiveRefresh();
   if (state.mode === "camera") await startCamera();
   updateRecognizeButton();
   setStatus(
@@ -950,6 +1092,7 @@ function nextRound() {
     endGame("Hoàn thành toàn bộ vòng chơi.");
     return;
   }
+  hideHint();
   clearDrawing();
   state.currentTarget =
     state.gamePool[(state.level - 1) % state.gamePool.length];
@@ -957,7 +1100,9 @@ function nextRound() {
   state.timeLeft = state.roundTime;
   state.roundStartedAt = Date.now();
   state.lastSavedKey = "";
-  resetReferenceImage("Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.");
+  resetReferenceImage(
+    "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.",
+  );
   updateTargetPanel();
   updateHud();
 }
@@ -967,6 +1112,7 @@ function startGameTimer() {
   state.timerId = setInterval(() => {
     if (!state.running) return;
     state.timeLeft -= 1;
+    if (state.timeLeft === 12) showHint();
     if (state.timeLeft <= 0) {
       failRound("Hết giờ.");
     }
@@ -979,6 +1125,19 @@ function startRealtimeAI() {
   // Hàm vẫn được giữ để các luồng cũ gọi an toàn, nhưng không tạo interval nữa.
   clearInterval(state.realtimeId);
   state.realtimeId = null;
+}
+
+// Tự động làm mới Skill Profile + Leaderboard định kỳ trong lúc chơi (không chỉ
+// sau mỗi vòng), để các panel luôn phản ánh dữ liệu mới nhất theo thời gian thực.
+function startLiveRefresh() {
+  clearInterval(state.liveRefreshId);
+  state.liveRefreshId = setInterval(async () => {
+    if (!state.running) return;
+    await refreshProfileAndLeaderboard();
+    renderProfile();
+    renderLeaderboard();
+    renderReviewPanel();
+  }, 12000);
 }
 
 async function manualRecognizeDrawing() {
@@ -1064,9 +1223,16 @@ function captureDrawingBlob() {
     temp.width = CANVAS_W;
     temp.height = CANVAS_H;
     const ctx = temp.getContext("2d");
+    // Sao chép nét vẽ rồi ÉP về ĐEN tuyền trên nền TRẮNG, để màu hiển thị (vd
+    // nét cyan ở chế độ camera) KHÔNG ảnh hưởng tới chất lượng nhận diện: model
+    // luôn nhận đúng input như khi vẽ chuột.
+    ctx.drawImage(src, 0, 0);
+    ctx.globalCompositeOperation = "source-in";
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.globalCompositeOperation = "destination-over";
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.drawImage(src, 0, 0);
     temp.toBlob((blob) => resolve(blob), "image/png");
   });
 }
@@ -1090,13 +1256,18 @@ function handleRecognitionDecision(data, { manual = true } = {}) {
   if (manual) {
     state.consecutiveCorrect = isCorrect ? 1 : 0;
     if (isCorrect) {
-      setStatus(`Nhận diện đúng '${target}' (${Math.round(conf * 100)}%). Chuyển sang từ tiếp theo...`, "ok");
+      setStatus(
+        `Nhận diện đúng '${target}' (${Math.round(conf * 100)}%). Chuyển sang từ tiếp theo...`,
+        "ok",
+      );
       setTimeout(() => passRound(conf), 650);
     } else {
       setStatus(
         `AI đoán '${data.label}' (${Math.round(conf * 100)}%), mục tiêu là '${target}'. Bạn có thể sửa nét rồi bấm Nhận diện lại.`,
         "error",
       );
+      playWrongSound();
+      showHint();
     }
     return;
   }
@@ -1122,6 +1293,18 @@ function passRound(confidence) {
   state.bestStreak = Math.max(state.bestStreak, state.streak);
   state.consecutiveCorrect = 0;
   showCorrectFlash(`Correct +${gained}`);
+  // Tự động phát âm từ vừa vẽ đúng (giống pyttsx3 trong báo cáo PDF) -> học
+  // từ vựng qua nghe ngay khi nhận diện thành công.
+  speakWord(state.currentTarget?.label);
+  playCorrectSound();
+  const learned = state.currentTarget?.label;
+  if (learned && !state.learnedWords.includes(learned))
+    state.learnedWords.push(learned);
+  if (state.streak > 0 && state.streak % 5 === 0) {
+    playComboSound(state.streak);
+    showCorrectFlash(`COMBO x${state.streak}! +${gained}`);
+  }
+  hideHint();
   broadcastPvp({
     type: "score",
     score: state.score,
@@ -1140,6 +1323,7 @@ function failRound(reason) {
   state.attempts += 1;
   state.streak = 0;
   state.lives -= 1;
+  playWrongSound();
   saveStrokeSample(false);
   if (state.lives <= 0) {
     endGame(`${reason} Hết mạng.`);
@@ -1185,7 +1369,10 @@ async function endGame(message) {
   await refreshProfileAndLeaderboard();
   renderProfile();
   renderLeaderboard();
+  renderReviewPanel();
   refreshRetrainStatus();
+  hideHint();
+  showGameOverSummary(message);
   setStatus(
     `${message} Score: ${state.score}. Accuracy: ${accuracy.toFixed(1)}%. Skill Profile và Leaderboard đã cập nhật.`,
     "ok",
@@ -1195,23 +1382,30 @@ async function endGame(message) {
 function stopAllLoops() {
   clearInterval(state.timerId);
   clearInterval(state.realtimeId);
+  clearInterval(state.liveRefreshId);
   state.timerId = null;
   state.realtimeId = null;
+  state.liveRefreshId = null;
 }
-
 
 function updateRecognizeButton() {
   const recognizeBtn = $("#recognizeBtn");
   const generateBtn = $("#generateImageBtn");
   const isDrawingNow = Boolean(state.currentStroke);
-  const canUseDrawing = Boolean(state.running && state.currentTarget && state.hasDrawn && !isDrawingNow);
+  const canUseDrawing = Boolean(
+    state.running && state.currentTarget && state.hasDrawn && !isDrawingNow,
+  );
   if (recognizeBtn) {
     recognizeBtn.disabled = !canUseDrawing || state.predictInFlight;
-    recognizeBtn.textContent = state.predictInFlight ? "Đang nhận diện..." : "Nhận diện";
+    recognizeBtn.textContent = state.predictInFlight
+      ? "Đang nhận diện..."
+      : "Nhận diện";
   }
   if (generateBtn) {
     generateBtn.disabled = !canUseDrawing || state.referenceImageInFlight;
-    generateBtn.textContent = state.referenceImageInFlight ? "Đang sinh..." : "Sinh hình thật";
+    generateBtn.textContent = state.referenceImageInFlight
+      ? "Đang sinh..."
+      : "Sinh hình thật";
     generateBtn.title = isDrawingNow
       ? "Hãy nhấc bút/dừng vẽ rồi mới sinh hình thật"
       : "Sinh ảnh thật theo nhãn AI vừa nhận diện, hoặc theo từ mục tiêu nếu chưa nhận diện";
@@ -1238,12 +1432,16 @@ async function manualGenerateReferenceImage() {
     return;
   }
   const reason = state.prediction?.label ? "ai-label-manual" : "target-manual";
-  const sourceText = state.prediction?.label ? "nhãn AI vừa nhận diện" : "từ cần vẽ";
+  const sourceText = state.prediction?.label
+    ? "nhãn AI vừa nhận diện"
+    : "từ cần vẽ";
   setStatus(`Đang sinh hình thật cho '${label}' theo ${sourceText}...`, "ok");
   await generateReferenceImage(label, reason);
 }
 
-function resetReferenceImage(message = "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.") {
+function resetReferenceImage(
+  message = "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.",
+) {
   state.referenceImageRequestId += 1;
   state.referenceImage = null;
   state.referenceImageInFlight = false;
@@ -1271,7 +1469,9 @@ function updateReferenceImagePanel() {
       badge.className = "badge warn";
     }
     box.className = "real-image-box empty";
-    box.textContent = state.referenceImageMessage || "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.";
+    box.textContent =
+      state.referenceImageMessage ||
+      "Vẽ xong rồi bấm Sinh hình thật để tạo ảnh. Hệ thống sẽ không tự sinh ảnh trong lúc bạn vẽ.";
     return;
   }
   if (badge) {
@@ -1477,6 +1677,7 @@ function updatePredictionPanel(data) {
   const box = $("#predictionList");
   if (!data || !data.top5) {
     box.textContent = "AI chưa có dữ liệu. Vẽ xong bấm Nhận diện.";
+    updatePredictOverlay(null);
     return;
   }
   const conf = Number(data.confidence || 0);
@@ -1487,9 +1688,10 @@ function updatePredictionPanel(data) {
   );
   const match = data.label === target;
   const source = data.ai_source || data.source || "image-cnn";
-  const faceRow = state.mode === "camera" && state.cameraTool === "face"
-    ? `<div class="mini-row"><span>Face input</span><small>${escapeHtml(cameraFaceLabel())}</small></div>`
-    : "";
+  const faceRow =
+    state.mode === "camera" && state.cameraTool === "face"
+      ? `<div class="mini-row"><span>Face input</span><small>${escapeHtml(cameraFaceLabel())}</small></div>`
+      : "";
   const rerank = data.rerank || data.judge?.rerank || null;
   const rerankRow = rerank?.used
     ? `<div class="mini-row"><span>Tối ưu nhận diện</span><small>rerank hình học · CNN gốc: ${escapeHtml(rerank.raw_label || "?")} ${Math.round(Number(rerank.raw_confidence || 0) * 100)}%</small></div>`
@@ -1517,6 +1719,27 @@ function updatePredictionPanel(data) {
     })
     .join("");
   box.innerHTML = sourceRows + rows;
+  updatePredictOverlay(data);
+}
+
+// Overlay icon lớp dự đoán ngay góc camera (lấy ý từ get_overlay/get_images của
+// QuickDraw-master/src/utils.py). Dùng lại bộ icon SVG sẵn có của dự án.
+function updatePredictOverlay(data) {
+  const overlay = $("#predictOverlay");
+  if (!overlay) return;
+  if (!data || !data.label || state.mode !== "camera") {
+    overlay.hidden = true;
+    return;
+  }
+  const conf = Number(data.confidence || 0);
+  const target = state.currentTarget?.label || data.target || "";
+  const isHit = data.label === target;
+  $("#predictOverlayIcon").innerHTML = getIllustrationSVG(data.label);
+  $("#predictOverlayLabel").textContent = data.label;
+  $("#predictOverlayConf").textContent = `${Math.round(conf * 100)}%`;
+  overlay.classList.toggle("hit", isHit);
+  overlay.classList.toggle("miss", !isHit);
+  overlay.hidden = false;
 }
 
 function updateJudge(judge) {
@@ -1758,7 +1981,10 @@ async function exportDataset() {
     const data = await apiGet("/dataset/export");
     await refreshProfileAndLeaderboard();
     renderProfile();
-    setStatus(`Đã export & lưu ${data.samples || 0} mẫu, ${data.classes || 0} lớp.`, "ok");
+    setStatus(
+      `Đã export & lưu ${data.samples || 0} mẫu, ${data.classes || 0} lớp.`,
+      "ok",
+    );
   } catch (err) {
     setStatus("Export lỗi: " + err.message, "warn");
   }
@@ -1773,7 +1999,10 @@ async function startRetrain(mode) {
   setStatus(`Đang train ${mode}...`, "");
   try {
     const data = await apiPostForm("/admin/retrain/start", form);
-    setStatus(data.ok ? `Đã bắt đầu train ${mode}.` : "Hệ thống đang bận train.", data.ok ? "ok" : "warn");
+    setStatus(
+      data.ok ? `Đã bắt đầu train ${mode}.` : "Hệ thống đang bận train.",
+      data.ok ? "ok" : "warn",
+    );
     setTimeout(refreshRetrainStatus, 1500);
   } catch (err) {
     setStatus("Train lỗi: " + err.message, "warn");
@@ -1789,7 +2018,10 @@ async function reloadImageModel() {
     await loadGameData();
     updateHud();
     renderProfile();
-    setStatus(`Đã reload model ảnh mới (${data.model?.num_recognition_categories || "?"} lớp).`, "ok");
+    setStatus(
+      `Đã reload model ảnh mới (${data.model?.num_recognition_categories || "?"} lớp).`,
+      "ok",
+    );
     return data;
   } catch (err) {
     console.warn(err);
@@ -1803,7 +2035,11 @@ async function refreshRetrainStatus() {
     const data = await apiGet("/admin/retrain/status");
     state.retrainStatus = data;
     if (data.status === "done") {
-      if (data.mode === "image" && data.self_improved_model_exists && !state.imageModelReloaded) {
+      if (
+        data.mode === "image" &&
+        data.self_improved_model_exists &&
+        !state.imageModelReloaded
+      ) {
         await reloadImageModel();
       }
       setStatus(`Train ${data.mode || ""} xong & đã lưu.`, "ok");
@@ -1814,20 +2050,22 @@ async function refreshRetrainStatus() {
   }
 }
 
-
-
 async function showPanelStorage(section = "") {
   // Theo yêu cầu: bấm nút chỉ tự động lưu dữ liệu, KHÔNG hiển thị log/danh sách file.
   const box = $("#panelStorageBox");
   if (box) box.innerHTML = "";
   try {
-    const qs = section ? `?section=${encodeURIComponent(section)}&limit=1` : "?limit=1";
+    const qs = section
+      ? `?section=${encodeURIComponent(section)}&limit=1`
+      : "?limit=1";
     await apiGet(`/admin/panel-storage${qs}`); // chạm endpoint để chắc chắn dữ liệu đã được ghi
   } catch (err) {
     // im lặng, không hiển thị log lỗi ra panel
   }
   setStatus(
-    section === "real_image_after_draw" ? "Đã lưu dữ liệu hình thật." : "Đã lưu toàn bộ dữ liệu panel.",
+    section === "real_image_after_draw"
+      ? "Đã lưu dữ liệu hình thật."
+      : "Đã lưu toàn bộ dữ liệu panel.",
     "ok",
   );
 }
@@ -1842,7 +2080,6 @@ async function showSelfLoopStorage() {
   setStatus("Đã lưu dữ liệu self-improving loop.", "ok");
 }
 
-
 async function refreshProStatus() {
   const box = $("#proOpsBox");
   if (!box) return;
@@ -1853,7 +2090,8 @@ async function refreshProStatus() {
     const ev = data.latest_eval || {};
     const ready = data.training_readiness || {};
     const cal = data.calibration || {};
-    const promo = (data.promotion_tail || [])[data.promotion_tail?.length - 1] || null;
+    const promo =
+      (data.promotion_tail || [])[data.promotion_tail?.length - 1] || null;
     const bmText = bm.num_samples
       ? `${bm.num_samples} mẫu · ${bm.num_classes} lớp · min/class ${bm.min_samples_per_class || 0}`
       : "chưa build";
@@ -1877,39 +2115,48 @@ async function refreshProStatus() {
 
 async function buildBenchmark() {
   const box = $("#proOpsBox");
-  if (box) box.innerHTML = `<div class="mini-row"><span>Đang build benchmark</span><small>đọc stroke_samples...</small></div>`;
+  if (box)
+    box.innerHTML = `<div class="mini-row"><span>Đang build benchmark</span><small>đọc stroke_samples...</small></div>`;
   try {
     const data = await apiPostForm("/admin/benchmark/build", new FormData());
     const m = data.manifest || {};
-    if (box) box.innerHTML = `<div class="mini-row"><span>Benchmark OK</span><small>${m.num_samples || 0} mẫu · ${m.num_classes || 0} lớp</small></div>`;
+    if (box)
+      box.innerHTML = `<div class="mini-row"><span>Benchmark OK</span><small>${m.num_samples || 0} mẫu · ${m.num_classes || 0} lớp</small></div>`;
     await refreshProStatus();
   } catch (err) {
-    if (box) box.innerHTML = `<div class="mini-row column"><span>Build lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    if (box)
+      box.innerHTML = `<div class="mini-row column"><span>Build lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
   }
 }
 
 async function evaluateRelease() {
   const box = $("#proOpsBox");
-  if (box) box.innerHTML = `<div class="mini-row"><span>Đang evaluate</span><small>có thể mất vài phút nếu model lớn</small></div>`;
+  if (box)
+    box.innerHTML = `<div class="mini-row"><span>Đang evaluate</span><small>có thể mất vài phút nếu model lớn</small></div>`;
   try {
     const data = await apiPostForm("/admin/evaluate/run", new FormData());
     const s = data.summary || {};
-    if (box) box.innerHTML = `<div class="mini-row"><span>Evaluate OK</span><small>top1 ${Math.round((s.top1_accuracy || 0) * 100)}% · ${s.samples || 0} mẫu</small></div>`;
+    if (box)
+      box.innerHTML = `<div class="mini-row"><span>Evaluate OK</span><small>top1 ${Math.round((s.top1_accuracy || 0) * 100)}% · ${s.samples || 0} mẫu</small></div>`;
     await refreshProStatus();
   } catch (err) {
-    if (box) box.innerHTML = `<div class="mini-row column"><span>Evaluate lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    if (box)
+      box.innerHTML = `<div class="mini-row column"><span>Evaluate lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
   }
 }
 
 async function promoteDryRun() {
   const box = $("#proOpsBox");
-  if (box) box.innerHTML = `<div class="mini-row"><span>Đang check promote</span><small>không thay model thật</small></div>`;
+  if (box)
+    box.innerHTML = `<div class="mini-row"><span>Đang check promote</span><small>không thay model thật</small></div>`;
   try {
     const data = await apiPostForm("/admin/promote/dry-run", new FormData());
-    if (box) box.innerHTML = `<div class="mini-row column"><span>Promote dry-run</span><small>${data.ok ? "Có thể promote theo gate prototype" : "Chưa đạt gate"}</small></div>`;
+    if (box)
+      box.innerHTML = `<div class="mini-row column"><span>Promote dry-run</span><small>${data.ok ? "Có thể promote theo gate prototype" : "Chưa đạt gate"}</small></div>`;
     await refreshProStatus();
   } catch (err) {
-    if (box) box.innerHTML = `<div class="mini-row column"><span>Promote lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
+    if (box)
+      box.innerHTML = `<div class="mini-row column"><span>Promote lỗi</span><small>${escapeHtml(err.message)}</small></div>`;
   }
 }
 
@@ -1923,13 +2170,278 @@ function speakCurrentWord() {
   window.speechSynthesis.speak(utter);
 }
 
+// Phát âm nhanh một từ (dùng khi vẽ đúng để học qua nghe).
+function speakWord(label) {
+  if (!label || !window.speechSynthesis) return;
+  const utter = new SpeechSynthesisUtterance(label);
+  utter.lang = "en-US";
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+}
+
+// ---- Hiệu ứng âm thanh (WebAudio, không cần file ngoài) ----
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!state.soundOn) return null;
+  try {
+    if (!_audioCtx)
+      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_audioCtx.state === "suspended") _audioCtx.resume();
+    return _audioCtx;
+  } catch {
+    return null;
+  }
+}
+
+function playTone(
+  freq,
+  startAt = 0,
+  duration = 0.12,
+  type = "sine",
+  gain = 0.18,
+) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const env = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  const t = ctx.currentTime + startAt;
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(gain, t + 0.01);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  osc.connect(env).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + duration + 0.02);
+}
+
+function playCorrectSound() {
+  // Hợp âm đi lên: vui khi nhận đúng.
+  playTone(523.25, 0, 0.12, "triangle");
+  playTone(659.25, 0.08, 0.12, "triangle");
+  playTone(783.99, 0.16, 0.18, "triangle");
+}
+
+function playWrongSound() {
+  // Hai nốt đi xuống, mềm: báo sai mà không gắt.
+  playTone(311.13, 0, 0.16, "sawtooth", 0.12);
+  playTone(233.08, 0.12, 0.22, "sawtooth", 0.12);
+}
+
+function playComboSound(level) {
+  // Combo càng cao nốt càng cao.
+  const base = 660 + Math.min(level, 12) * 40;
+  playTone(base, 0, 0.1, "square", 0.14);
+  playTone(base * 1.5, 0.08, 0.16, "square", 0.14);
+}
+
+function toggleSound() {
+  state.soundOn = !state.soundOn;
+  const btn = $("#soundToggleBtn");
+  if (btn) btn.textContent = state.soundOn ? "Âm thanh: Bật" : "Âm thanh: Tắt";
+  if (state.soundOn) playTone(660, 0, 0.1, "triangle");
+}
+
+// ---- Gợi ý: hiện mờ hình mẫu khi sai hoặc gần hết giờ ----
+function showHint() {
+  const overlay = $("#hintOverlay");
+  if (!overlay || !state.currentTarget) return;
+  overlay.innerHTML = getIllustrationSVG(state.currentTarget.label);
+  overlay.hidden = false;
+  overlay.classList.add("show");
+}
+
+function hideHint() {
+  const overlay = $("#hintOverlay");
+  if (!overlay) return;
+  overlay.classList.remove("show");
+  overlay.hidden = true;
+  overlay.innerHTML = "";
+}
+
+// ---- Hoàn tác xóa nét ----
+function undoClear() {
+  if (!state.lastCanvasSnapshot) return;
+  const draw = $("#drawCanvas");
+  const ctx = draw.getContext("2d");
+  const img = new Image();
+  img.onload = () => {
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+    state.hasDrawn = true;
+    updateRecognizeButton();
+  };
+  img.src = state.lastCanvasSnapshot;
+  state.lastCanvasSnapshot = null;
+  const undoBtn = $("#undoClearBtn");
+  if (undoBtn) undoBtn.disabled = true;
+  setStatus("Đã khôi phục nét vẽ vừa xóa.", "ok");
+}
+
+// ---- Panel ôn tập từ hay sai (dùng dữ liệu weaknesses từ Skill Profile) ----
+function renderReviewPanel() {
+  const box = $("#reviewBox");
+  if (!box) return;
+  const weaknesses = (state.profile?.weaknesses || []).filter(
+    (w) => Number(w.accuracy) < 70,
+  );
+  const btn = $("#practiceWeakBtn");
+  if (btn) btn.disabled = weaknesses.length === 0;
+  if (!weaknesses.length) {
+    box.innerHTML = `<div class="mini-row"><span>Chưa có từ yếu</span><small>Chơi vài vòng để hệ thống ghi nhận</small></div>`;
+    return;
+  }
+  box.innerHTML = weaknesses
+    .slice(0, 6)
+    .map(
+      (w) =>
+        `<div class="mini-row column"><span>${escapeHtml(w.target)} <em>${w.accuracy}%</em></span><small>${w.attempts} lần · ${escapeHtml(w.tip || "Luyện thêm để nhớ cách vẽ")}</small></div>`,
+    )
+    .join("");
+}
+
+// Bắt đầu một lượt chơi chỉ gồm các từ đang yếu để luyện tập có mục tiêu.
+function practiceWeakWords() {
+  const weak = (state.profile?.weaknesses || [])
+    .filter((w) => Number(w.accuracy) < 70)
+    .map((w) => w.target);
+  if (!weak.length) {
+    setStatus("Chưa có từ yếu để luyện.", "warn");
+    return;
+  }
+  const pool = (
+    state.supportedVocab.length ? state.supportedVocab : state.vocab
+  ).filter((v) => weak.includes(v.label));
+  if (!pool.length) {
+    setStatus("Không tìm thấy từ yếu trong bộ từ hiện tại.", "warn");
+    return;
+  }
+  if (state.running) endGame("Chuyển sang chế độ luyện từ yếu.");
+  state.gamePool = shuffle(pool);
+  startGame();
+  // startGame sẽ xáo lại gamePool từ toàn bộ vocab -> ép lại sau khi start.
+  state.gamePool = shuffle(pool);
+  state.currentTarget = state.gamePool[0];
+  updateTargetPanel();
+  setStatus(
+    `Đang luyện ${pool.length} từ yếu. Cố gắng vẽ đúng để cải thiện!`,
+    "ok",
+  );
+}
+
+// ---- Auto-retrain an toàn: tự train khi tích đủ mẫu mới, không làm giật game ----
+function toggleAutoRetrain() {
+  state.autoRetrain = !state.autoRetrain;
+  const btn = $("#autoRetrainBtn");
+  if (btn)
+    btn.textContent = state.autoRetrain
+      ? "Auto-retrain: Bật"
+      : "Auto-retrain: Tắt";
+  if (state.autoRetrain) {
+    state.autoRetrainBaseline = state.profile?.training?.total_samples ?? null;
+    startAutoRetrainLoop();
+    setStatus(
+      "Đã bật Auto-retrain: hệ thống sẽ tự train khi có đủ 20 mẫu mới.",
+      "ok",
+    );
+  } else {
+    clearInterval(state.autoRetrainId);
+    state.autoRetrainId = null;
+    setStatus("Đã tắt Auto-retrain.", "");
+  }
+}
+
+function startAutoRetrainLoop() {
+  clearInterval(state.autoRetrainId);
+  state.autoRetrainId = setInterval(async () => {
+    if (!state.autoRetrain) return;
+    try {
+      const profile = await apiGet("/game/profile");
+      const total = profile?.training?.total_samples ?? 0;
+      const ready = profile?.training?.ready_stroke;
+      if (state.autoRetrainBaseline == null) state.autoRetrainBaseline = total;
+      const newSamples = total - state.autoRetrainBaseline;
+      const jobRunning = state.retrainStatus?.process_running;
+      const box = $("#retrainBox");
+      if (box) {
+        box.innerHTML = `<div class="mini-row column"><span>Auto-retrain bật</span><small>${newSamples}/20 mẫu mới · ${ready ? "đủ điều kiện" : "cần thêm lớp"}</small></div>`;
+      }
+      if (ready && newSamples >= 20 && !jobRunning) {
+        await startRetrain("stroke");
+        state.autoRetrainBaseline = total;
+      }
+    } catch {
+      // im lặng
+    }
+  }, 60000);
+}
+
+// ---- Production AI Ops tự cập nhật trạng thái định kỳ ----
+function startProStatusLoop() {
+  clearInterval(state.proStatusId);
+  state.proStatusId = setInterval(() => {
+    refreshProStatus();
+  }, 20000);
+}
+
+// ---- Màn hình tổng kết khi kết thúc game ----
+function showGameOverSummary(message) {
+  const duration = Math.round((Date.now() - state.startedAt) / 1000);
+  const accuracy = state.attempts ? (state.correct / state.attempts) * 100 : 0;
+  const learned = state.learnedWords || [];
+  const learnedChips = learned.length
+    ? learned
+        .map((w) => `<span class="go-chip">${escapeHtml(w)}</span>`)
+        .join("")
+    : `<span class="go-chip muted">Chưa có từ nào</span>`;
+  const old = document.getElementById("gameOverModal");
+  if (old) old.remove();
+  const modal = document.createElement("div");
+  modal.id = "gameOverModal";
+  modal.className = "game-over-modal";
+  modal.innerHTML = `
+    <div class="game-over-card">
+      <h2>Kết thúc lượt chơi</h2>
+      <p class="go-msg">${escapeHtml(message || "")}</p>
+      <div class="go-grid">
+        <div class="go-cell"><span>Điểm</span><strong>${state.score}</strong></div>
+        <div class="go-cell"><span>Độ chính xác</span><strong>${accuracy.toFixed(0)}%</strong></div>
+        <div class="go-cell"><span>Streak tốt nhất</span><strong>${state.bestStreak}</strong></div>
+        <div class="go-cell"><span>Vẽ đúng</span><strong>${state.correct}/${state.attempts}</strong></div>
+        <div class="go-cell"><span>Thời gian</span><strong>${duration}s</strong></div>
+        <div class="go-cell"><span>Từ đã học</span><strong>${learned.length}</strong></div>
+      </div>
+      <div class="go-learned"><span>Từ đã học trong lượt:</span><div class="go-chips">${learnedChips}</div></div>
+      <div class="go-actions">
+        <button id="goReplayBtn" class="primary" type="button">Chơi lại</button>
+        <button id="goWeakBtn" class="secondary" type="button">Luyện từ yếu</button>
+        <button id="goCloseBtn" class="ghost" type="button">Đóng</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  $("#goReplayBtn").addEventListener("click", () => {
+    modal.remove();
+    startGame();
+  });
+  $("#goWeakBtn").addEventListener("click", () => {
+    modal.remove();
+    practiceWeakWords();
+  });
+  $("#goCloseBtn").addEventListener("click", () => modal.remove());
+}
 
 function loadScriptOnce(src, globalTest, timeoutMs = 9000) {
   if (globalTest()) return Promise.resolve(true);
-  const existing = [...document.scripts].find((script) => script.src === src || script.src.includes(src.split("/").slice(-2).join("/")));
+  const existing = [...document.scripts].find(
+    (script) =>
+      script.src === src ||
+      script.src.includes(src.split("/").slice(-2).join("/")),
+  );
   if (existing) {
     return new Promise((resolve) => {
-      existing.addEventListener("load", () => resolve(Boolean(globalTest())), { once: true });
+      existing.addEventListener("load", () => resolve(Boolean(globalTest())), {
+        once: true,
+      });
       existing.addEventListener("error", () => resolve(false), { once: true });
       setTimeout(() => resolve(Boolean(globalTest())), timeoutMs);
     });
@@ -1953,7 +2465,8 @@ async function ensureHandsReady() {
   if (!loaded) throw new Error("MediaPipe Hands could not be loaded");
   if (state.hands) return true;
   state.hands = new window.Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
   });
   state.hands.setOptions({
     maxNumHands: 1,
@@ -1977,7 +2490,8 @@ async function ensureFaceMeshReady() {
   if (!loaded) throw new Error("MediaPipe FaceMesh could not be loaded");
   if (state.faceMesh) return true;
   state.faceMesh = new window.FaceMesh({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
   });
   state.faceMesh.setOptions({
     maxNumFaces: 1,
@@ -2119,7 +2633,10 @@ async function startCamera() {
     }
   } catch (err) {
     console.warn("MediaPipe init error:", err);
-    setStatus(`${err.message}. Camera đã bật nhưng bộ nhận diện đang chọn chưa sẵn sàng.`, "error");
+    setStatus(
+      `${err.message}. Camera đã bật nhưng bộ nhận diện đang chọn chưa sẵn sàng.`,
+      "error",
+    );
   }
   updateCameraToolUI();
   return true;
@@ -2155,7 +2672,12 @@ async function waitNextFrame() {
 async function handFrameLoop() {
   while (state.handLoop && state.hands) {
     const video = $("#cameraVideo");
-    if (!video || video.readyState < 2 || state.mode !== "camera" || state.cameraTool !== "hand") {
+    if (
+      !video ||
+      video.readyState < 2 ||
+      state.mode !== "camera" ||
+      state.cameraTool !== "hand"
+    ) {
       await waitNextFrame();
       continue;
     }
@@ -2171,7 +2693,12 @@ async function handFrameLoop() {
 async function faceFrameLoop() {
   while (state.faceLoop && state.faceMesh) {
     const video = $("#cameraVideo");
-    if (!video || video.readyState < 2 || state.mode !== "camera" || state.cameraTool !== "face") {
+    if (
+      !video ||
+      video.readyState < 2 ||
+      state.mode !== "camera" ||
+      state.cameraTool !== "face"
+    ) {
       await waitNextFrame();
       continue;
     }
@@ -2184,7 +2711,6 @@ async function faceFrameLoop() {
   }
 }
 
-
 function onFaceResults(results) {
   if (state.cameraTool !== "face") return;
   const canvas = $("#faceCanvas");
@@ -2193,7 +2719,11 @@ function onFaceResults(results) {
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   const landmarks = results.multiFaceLandmarks?.[0];
   if (!landmarks) {
-    state.faceStatus = { faceDetected: false, ready: false, status: "chưa thấy mặt" };
+    state.faceStatus = {
+      faceDetected: false,
+      ready: false,
+      status: "chưa thấy mặt",
+    };
     state.faceDrawingActive = false;
     updateCameraToolUI();
     liftPenDebounced();
@@ -2230,19 +2760,23 @@ function onFaceResults(results) {
 
 function getFaceDrawingMetrics(landmarks) {
   const p = (idx) => landmarks[idx] || landmarks[1];
-  const dist = (a, b) => Math.hypot((a.x - b.x) * CANVAS_W, (a.y - b.y) * CANVAS_H);
+  const dist = (a, b) =>
+    Math.hypot((a.x - b.x) * CANVAS_W, (a.y - b.y) * CANVAS_H);
   const nose = p(1);
   const faceHeight = Math.max(1, dist(p(10), p(152)));
   const mouthRatio = dist(p(13), p(14)) / faceHeight;
   const leftEyeRatio = dist(p(159), p(145)) / Math.max(1, dist(p(33), p(133)));
-  const rightEyeRatio = dist(p(386), p(374)) / Math.max(1, dist(p(362), p(263)));
+  const rightEyeRatio =
+    dist(p(386), p(374)) / Math.max(1, dist(p(362), p(263)));
   return {
     nose,
     mouthRatio,
     mouthOpen: mouthRatio >= FACE_DRAW_MOUTH_THRESHOLD,
     leftEyeRatio,
     rightEyeRatio,
-    bothEyesClosed: leftEyeRatio <= FACE_CLEAR_BLINK_THRESHOLD && rightEyeRatio <= FACE_CLEAR_BLINK_THRESHOLD,
+    bothEyesClosed:
+      leftEyeRatio <= FACE_CLEAR_BLINK_THRESHOLD &&
+      rightEyeRatio <= FACE_CLEAR_BLINK_THRESHOLD,
   };
 }
 
@@ -2292,17 +2826,34 @@ function smoothFacePoint(point) {
 function drawFaceOverlay(ctx, landmarks, metrics) {
   ctx.save();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = metrics.mouthOpen ? "rgba(85, 230, 165, 0.95)" : "rgba(255, 207, 87, 0.95)";
-  ctx.fillStyle = metrics.mouthOpen ? "rgba(85, 230, 165, 0.9)" : "rgba(255, 207, 87, 0.85)";
+  ctx.strokeStyle = metrics.mouthOpen
+    ? "rgba(85, 230, 165, 0.95)"
+    : "rgba(255, 207, 87, 0.95)";
+  ctx.fillStyle = metrics.mouthOpen
+    ? "rgba(85, 230, 165, 0.9)"
+    : "rgba(255, 207, 87, 0.85)";
   const xy = (idx) => {
     const p = landmarks[idx];
     return { x: (1 - p.x) * CANVAS_W, y: p.y * CANVAS_H };
   };
   const chains = [
-    [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10],
-    [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33],
-    [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466, 263],
-    [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61],
+    [
+      10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379,
+      378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+      162, 21, 54, 103, 67, 109, 10,
+    ],
+    [
+      33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161,
+      246, 33,
+    ],
+    [
+      263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388,
+      466, 263,
+    ],
+    [
+      61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0,
+      37, 39, 40, 185, 61,
+    ],
     [1, 2, 98, 327, 1],
   ];
   for (const chain of chains) {
@@ -2349,13 +2900,14 @@ function onHandResults(results) {
   // Hysteresis: bắt đầu vẽ cần duỗi rõ; ngừng khi gập rõ -> nét vừa liền vừa
   // tách bạch đúng lúc nhấc tay.
   const ratio = dist(index, wrist) / Math.max(1e-4, dist(indexPip, wrist));
-  const DOWN_ON = 1.18;   // duỗi rõ mới bắt đầu nét mới
-  const DOWN_OFF = 1.04;  // co lại quá mức này -> nhấc bút (tách nét)
+  const DOWN_ON = 1.18; // duỗi rõ mới bắt đầu nét mới
+  const DOWN_OFF = 1.04; // co lại quá mức này -> nhấc bút (tách nét)
   const wasDrawing = Boolean(state.currentStroke);
   const indexUp = wasDrawing ? ratio > DOWN_OFF : ratio > DOWN_ON;
   // Xòe cả bàn tay để xóa: 4 đầu ngón đều xa cổ tay (rotation-invariant).
   const openPalm = [8, 12, 16, 20].every(
-    (tip) => dist(landmarks[tip], wrist) > dist(landmarks[tip - 2], wrist) * 1.1,
+    (tip) =>
+      dist(landmarks[tip], wrist) > dist(landmarks[tip - 2], wrist) * 1.1,
   );
   const now = Date.now();
   if (openPalm && now - state.lastPalmClear > 1600) {
@@ -2364,6 +2916,33 @@ function onHandResults(results) {
     setStatus("Đã xóa nét bằng thao tác xòe bàn tay.");
     return;
   }
+
+  // CỬ CHỈ NHẬN DIỆN (port từ QuickDraw mediapipe_app.py): giơ 3 ngón
+  // trỏ + giữa + áp út, gập ngón út -> tự động nhận diện nét vừa vẽ (rảnh tay,
+  // không cần bấm nút). Ngón út gập để phân biệt với thao tác xòe bàn tay (xóa).
+  const fingerExt = (tip, pip) =>
+    dist(landmarks[tip], wrist) > dist(landmarks[pip], wrist) * 1.1;
+  const recognizeGesture =
+    fingerExt(8, 6) &&
+    fingerExt(12, 10) &&
+    fingerExt(16, 14) &&
+    !fingerExt(20, 18);
+  if (
+    recognizeGesture &&
+    state.running &&
+    state.currentTarget &&
+    state.hasDrawn &&
+    !state.predictInFlight &&
+    now - (state.lastGestureRecognize || 0) > 2500
+  ) {
+    state.lastGestureRecognize = now;
+    if (state.currentStroke) endStroke();
+    drawPenCursor(ctx, (1 - index.x) * CANVAS_W, index.y * CANVAS_H, false);
+    setStatus("Cử chỉ 3 ngón: đang nhận diện nét vẽ...", "ok");
+    manualRecognizeDrawing();
+    return;
+  }
+
   if (!state.running && !state.currentTarget) return;
   if (!indexUp) {
     // Vẫn hiển thị con trỏ (rỗng) để người dùng ngắm vị trí trước khi hạ bút vẽ.
@@ -2382,7 +2961,10 @@ function onHandResults(results) {
   // Tách nét trên toạ độ THÔ: nếu đầu ngón nhảy xa (nhấc tay đổi vị trí) thì
   // kết thúc nét cũ và reset bộ lọc -> nét mới bắt đầu sạch, không bị kéo nối.
   if (state.currentStroke && state.lastRawHand) {
-    const jump = Math.hypot(raw.x - state.lastRawHand.x, raw.y - state.lastRawHand.y);
+    const jump = Math.hypot(
+      raw.x - state.lastRawHand.x,
+      raw.y - state.lastRawHand.y,
+    );
     if (jump > 150) {
       endStroke();
       resetHandEuro();
@@ -2449,9 +3031,18 @@ function makeOneEuro({ minCutoff = 1.2, beta = 0.015, dCutoff = 1.0 } = {}) {
     return 1 / (1 + tau / dt);
   };
   return {
-    reset() { xPrev = null; dxPrev = 0; tPrev = null; },
+    reset() {
+      xPrev = null;
+      dxPrev = 0;
+      tPrev = null;
+    },
     filter(x, t) {
-      if (tPrev === null) { tPrev = t; xPrev = x; dxPrev = 0; return x; }
+      if (tPrev === null) {
+        tPrev = t;
+        xPrev = x;
+        dxPrev = 0;
+        return x;
+      }
       let dt = (t - tPrev) / 1000;
       if (!(dt > 0)) dt = 1 / 60;
       tPrev = t;

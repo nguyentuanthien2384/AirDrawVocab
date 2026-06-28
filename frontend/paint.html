@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vẽ trên màn hình bằng tay · AirDrawVocab</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<style>
+  :root{ --bg:#0e1116; --ink:#e7edf3; --muted:#8a97a6; --line:#283241;
+         --font:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif; }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font)}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px}
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  h1{font-size:20px;margin:0} .sub{color:var(--muted);font-size:13px}
+  .badge{margin-left:auto;font-size:12px;color:var(--muted);border:1px solid var(--line);padding:4px 10px;border-radius:999px}
+  .stage{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--line)}
+  .stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%}
+  .stage video{object-fit:cover;transform:scaleX(-1)} #overlay{z-index:2}
+  .controls{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+  button{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#11171f;color:var(--ink);font:inherit;cursor:pointer}
+  button:hover{background:#161d27}
+  .help{margin-top:12px;color:var(--muted);font-size:13px;line-height:1.7}
+  .help b{color:var(--ink)} kbd{background:#11171f;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px}
+  .err{color:#ff5d5d;font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Vẽ trên màn hình bằng tay</h1>
+    <span class="sub">Cử chỉ giống video: 1 ngón = vẽ · 2 ngón = chọn màu trên thanh</span>
+    <span class="badge" id="badge">đang khởi động…</span>
+  </header>
+
+  <div class="stage">
+    <video id="cam" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="btnCam">Bật camera</button>
+    <button id="btnClear">Xóa hết (C)</button>
+    <button id="btnSave">Lưu ảnh (S)</button>
+  </div>
+
+  <div class="help">
+    <b>Cử chỉ:</b> &nbsp;✏️ <b>Chỉ ngón trỏ</b> giơ lên → <b>VẼ</b>. &nbsp; ✌️ <b>Ngón trỏ + ngón giữa</b> →
+    <b>CHỌN</b> (đưa lên thanh màu trên cùng để đổi màu hoặc chọn <b>Tẩy</b>/<b>Xóa</b>). &nbsp;
+    Nắm tay/hạ ngón trỏ → nhấc bút. <br>
+    Phím: <kbd>C</kbd> xóa · <kbd>S</kbd> lưu · canvas giữ nguyên đến khi xóa.
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<script>
+const W=1280, H=720, HEADER_H=86;
+const video=document.getElementById('cam');
+const overlay=document.getElementById('overlay'); overlay.width=W; overlay.height=H;
+const ctx=overlay.getContext('2d');
+const draw=document.createElement('canvas'); draw.width=W; draw.height=H;     // lớp nét vẽ bền
+const dctx=draw.getContext('2d'); dctx.lineCap='round'; dctx.lineJoin='round';
+const $=id=>document.getElementById(id);
+
+const PALETTE=[["Tím","#e63cb4"],["Xanh","#1ea0f0"],["Lá","#5ad25a"],["Vàng","#f5d228"],["Đỏ","#eb3c3c"],["Trắng","#f0f0f0"]];
+const SLOTS=(()=>{const items=[...PALETTE.map(p=>p[0]),"Tẩy","Xóa"];const n=items.length;const w=W/n;
+  return items.map((name,i)=>({name,x0:i*w,x1:(i<n-1)?(i+1)*w:W,color:(PALETTE.find(p=>p[0]===name)||[])[1]}));})();
+
+let color="#e63cb4", colorName="Tím", isEraser=false, xp=0, yp=0;
+
+// One-Euro smoothing
+function oneEuro(minCut=1.6,beta=0.03,dcut=1){let xp=null,dxp=0,tp=null;const a=(c,dt)=>{const r=2*Math.PI*c*dt;return r/(r+1)};
+  return (x,t)=>{if(tp===null){tp=t;xp=x;return x;}const dt=Math.max((t-tp)/1000,1e-3);tp=t;const dx=(x-xp)/dt;
+  const ad=a(dcut,dt);dxp=ad*dx+(1-ad)*dxp;const c=minCut+beta*Math.abs(dxp);const ax=a(c,dt);xp=ax*x+(1-ax)*xp;return xp;};}
+let fx=oneEuro(), fy=oneEuro();
+
+function fingersUp(lm, label){
+  const TIP=[4,8,12,16,20]; const f=[0,0,0,0,0];
+  f[0]=(label==="Right")?(lm[TIP[0]].x>lm[TIP[0]-1].x?1:0):(lm[TIP[0]].x<lm[TIP[0]-1].x?1:0);
+  for(let i=1;i<5;i++) f[i]=(lm[TIP[i]].y<lm[TIP[i]-2].y)?1:0;
+  return f;
+}
+function pick(x){
+  for(const s of SLOTS){ if(x>=s.x0 && x<s.x1){
+    if(s.name==="Tẩy") isEraser=true;
+    else if(s.name==="Xóa") dctx.clearRect(0,0,W,H);
+    else { isEraser=false; color=s.color; colorName=s.name; }
+    return;
+  }}
+}
+function header(){
+  ctx.save(); ctx.globalAlpha=.78; ctx.fillStyle="#1c1c22"; ctx.fillRect(0,0,W,HEADER_H); ctx.globalAlpha=1;
+  for(const s of SLOTS){
+    if(s.name==="Tẩy"){ ctx.strokeStyle="#888"; ctx.lineWidth=2; ctx.strokeRect(s.x0+14,16,(s.x1-s.x0)-28,HEADER_H-32);
+      ctx.fillStyle="#fff"; ctx.font="bold 20px "+getComputedStyle(document.body).fontFamily; ctx.fillText("Tẩy",(s.x0+s.x1)/2-22,HEADER_H/2+8);}
+    else if(s.name==="Xóa"){ ctx.strokeStyle="#c33"; ctx.lineWidth=2; ctx.strokeRect(s.x0+14,16,(s.x1-s.x0)-28,HEADER_H-32);
+      ctx.fillStyle="#fff"; ctx.font="bold 20px "+getComputedStyle(document.body).fontFamily; ctx.fillText("Xóa",(s.x0+s.x1)/2-24,HEADER_H/2+8);}
+    else { ctx.fillStyle=s.color; ctx.fillRect(s.x0+14,16,(s.x1-s.x0)-28,HEADER_H-32);}
+    const active=(isEraser&&s.name==="Tẩy")||(!isEraser&&s.name===colorName);
+    if(active){ctx.strokeStyle="#fff";ctx.lineWidth=3;ctx.strokeRect(s.x0+8,10,(s.x1-s.x0)-16,HEADER_H-20);}
+  }
+  ctx.restore();
+}
+function render(cursor, mode){
+  ctx.clearRect(0,0,W,H);
+  ctx.drawImage(draw,0,0);               // nét đã vẽ
+  header();
+  if(cursor){ ctx.fillStyle = mode==="CHỌN" ? color : "#ffffff";
+    ctx.beginPath(); ctx.arc(cursor[0],cursor[1], mode==="CHỌN"?14:10, 0, 7); ctx.fill(); }
+  ctx.fillStyle="#cdd6e0"; ctx.font="16px "+getComputedStyle(document.body).fontFamily;
+  ctx.fillText("Chế độ: "+(mode||"—"), 16, H-16);
+}
+
+// MediaPipe loop
+let hands=null, raf=null, stream=null;
+function onResults(res){
+  let cursor=null, mode="—";
+  if(res.multiHandLandmarks && res.multiHandLandmarks.length){
+    const lm=res.multiHandLandmarks[0];
+    const label=(res.multiHandedness&&res.multiHandedness[0])?res.multiHandedness[0].label:"Right";
+    const f=fingersUp(lm,label);
+    const t=performance.now();
+    const ix=(1-lm[8].x)*W, iy=lm[8].y*H;       // lật X vì video mirror
+    const sx=fx(ix,t), sy=fy(iy,t);
+    cursor=[sx,sy];
+    const indexOnly=f[1]===1&&f[2]===0, twoFingers=f[1]===1&&f[2]===1;
+    if(twoFingers){ mode="CHỌN"; xp=0;yp=0; if(sy<HEADER_H) pick(sx); }
+    else if(indexOnly){
+      mode=isEraser?"TẨY":"VẼ";
+      if(xp===0&&yp===0){xp=sx;yp=sy;}
+      if(isEraser){ dctx.save(); dctx.globalCompositeOperation="destination-out";
+        dctx.lineWidth=60; dctx.beginPath(); dctx.moveTo(xp,yp); dctx.lineTo(sx,sy); dctx.stroke(); dctx.restore(); }
+      else { dctx.strokeStyle=color; dctx.lineWidth=15; dctx.beginPath(); dctx.moveTo(xp,yp); dctx.lineTo(sx,sy); dctx.stroke(); }
+      xp=sx; yp=sy;
+    } else { xp=0;yp=0; }
+  } else { xp=0;yp=0; }
+  render(cursor, mode);
+}
+async function startCamera(){
+  $('err').textContent='';
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720},audio:false});
+    video.srcObject=stream; await video.play(); $('badge').textContent='camera';
+    if(!hands){
+      hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+      hands.setOptions({maxNumHands:1,modelComplexity:1,minDetectionConfidence:0.7,minTrackingConfidence:0.6});
+      hands.onResults(onResults);
+    }
+    const loop=async()=>{ if(video.readyState>=2) await hands.send({image:video}); raf=requestAnimationFrame(loop); };
+    loop();
+  }catch(e){ $('badge').textContent='không có camera'; $('err').textContent='Không bật được camera: '+e.message; }
+}
+
+$('btnCam').addEventListener('click',startCamera);
+$('btnClear').addEventListener('click',()=>dctx.clearRect(0,0,W,H));
+$('btnSave').addEventListener('click',()=>{const a=document.createElement('a');a.download='painting.png';a.href=draw.toDataURL();a.click();});
+window.addEventListener('keydown',e=>{ if(e.key==='c'||e.key==='C')dctx.clearRect(0,0,W,H);
+  if(e.key==='s'||e.key==='S'){const a=document.createElement('a');a.download='painting.png';a.href=draw.toDataURL();a.click();} });
+render(null,"—");
+</script>
+</body>
+</html>

@@ -177,6 +177,70 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .correct-flash.show { display: grid; animation: pop 700ms ease forwards; }
 @keyframes pop { 0% { opacity: 0; transform: scale(0.92); } 30% { opacity: 1; transform: scale(1.04); } 100% { opacity: 0; transform: scale(1); } }
 
+/* Overlay icon lớp dự đoán ở góc trên-phải camera (ý tưởng từ get_overlay của
+   QuickDraw-master). Chỉ hiện ở chế độ camera khi đã có kết quả nhận diện. */
+.predict-overlay {
+  position: absolute; inset: 18px 18px auto auto; z-index: 6;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(8, 16, 31, 0.82); padding: 8px 12px 8px 8px; border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.18); backdrop-filter: blur(10px);
+  animation: pop-in 220ms ease;
+}
+.predict-overlay[hidden] { display: none; }
+.predict-overlay.hit { border-color: rgba(85, 230, 165, 0.9); box-shadow: 0 8px 28px rgba(85, 230, 165, 0.35); }
+.predict-overlay.miss { border-color: rgba(255, 120, 100, 0.8); }
+.predict-overlay-icon {
+  width: 56px; height: 56px; flex: 0 0 auto;
+  background: rgba(255,255,255,0.06); border-radius: 12px; padding: 4px;
+}
+.predict-overlay-icon svg { width: 100%; height: 100%; display: block; }
+.predict-overlay-text { display: grid; line-height: 1.15; }
+.predict-overlay-text strong { color: var(--text); font-size: 18px; text-transform: capitalize; }
+.predict-overlay-text small { color: var(--accent); font-weight: 800; font-size: 14px; }
+@keyframes pop-in { 0% { opacity: 0; transform: translateY(-6px) scale(0.96); } 100% { opacity: 1; transform: none; } }
+
+/* Gợi ý: hình mẫu mờ làm watermark giữa khung vẽ */
+.hint-overlay {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none; opacity: 0; transition: opacity 320ms ease;
+}
+.hint-overlay[hidden] { display: none; }
+.hint-overlay.show { opacity: 0.16; }
+.hint-overlay svg { width: 42%; max-width: 320px; height: auto; }
+
+/* Màn hình tổng kết khi kết thúc game */
+.game-over-modal {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 9, 20, 0.72); backdrop-filter: blur(6px);
+  animation: pop-in 200ms ease;
+}
+.game-over-card {
+  width: min(520px, 92vw); padding: 28px;
+  background: var(--panel, #0e1726); border: 1px solid var(--line, rgba(255,255,255,0.12));
+  border-radius: 22px; box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+}
+.game-over-card h2 { margin: 0 0 6px; font-size: 24px; }
+.game-over-card .go-msg { margin: 0 0 18px; color: var(--muted); }
+.go-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.go-cell {
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line, rgba(255,255,255,0.08));
+  border-radius: 14px; padding: 12px; display: grid; gap: 4px;
+}
+.go-cell span { color: var(--muted); font-size: 12px; }
+.go-cell strong { font-size: 22px; color: var(--text); }
+.go-learned { margin: 18px 0; display: grid; gap: 8px; }
+.go-learned > span { color: var(--muted); font-size: 13px; }
+.go-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.go-chip {
+  padding: 4px 10px; border-radius: 999px; font-size: 12px; text-transform: capitalize;
+  background: rgba(85,230,165,0.15); color: var(--accent, #55e6a5); border: 1px solid rgba(85,230,165,0.3);
+}
+.go-chip.muted { background: rgba(255,255,255,0.06); color: var(--muted); border-color: var(--line, rgba(255,255,255,0.1)); }
+.go-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.go-actions button { flex: 1 1 auto; }
+
 .controls {
   display: grid;
   gap: 12px;

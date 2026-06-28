@@ -441,6 +441,19 @@ app.add_middleware(
 )
 
 
+# === Tính năng "Tô theo hình mẫu" (shape_match) ===========================
+# Thêm 2 endpoint: GET /shape/templates và POST /shape/score.
+# Bọc try/except để nếu thiếu thư mục shape_match thì app vẫn chạy bình thường.
+try:
+    from shape_match.web_endpoint import router as shape_router
+    if shape_router is not None:
+        app.include_router(shape_router)
+        print("[shape_match] Đã gắn router: GET /shape/templates, POST /shape/score")
+except Exception as _e:  # pragma: no cover
+    print(f"[shape_match] Bỏ qua (không gắn được router): {_e}")
+# =========================================================================
+
+
 VOCAB_GROUPS = {
     "apple": "Food", "banana": "Food", "ice cream": "Food", "cake": "Food", "fish": "Food",
     "dog": "Animals", "cat": "Animals",
@@ -1563,7 +1576,12 @@ def home():
     """Mở giao diện vẽ nếu có frontend, nếu không trả về trạng thái API."""
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        # KHÔNG cache index.html: nếu cache, trình duyệt sẽ giữ bản cũ và không
+        # bao giờ tải app.js/style.css mới (dù đã đổi ?v=...). Buộc revalidate.
+        return FileResponse(
+            index_file,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     return {"message": "AirDrawVocab API is running", "docs": "/docs"}
 
 

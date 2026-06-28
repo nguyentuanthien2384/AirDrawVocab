@@ -72,3 +72,10 @@ data/benchmark/
 # Jupyter / local notebooks
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+
+# Runtime logs and databases
+data/panel_storage/
+data/self_improving_loop/
+data/airdrawvocab_app.sqlite3
+final_status.json
+

@@ -1,8 +1,0 @@
-{
-  "status": "done",
-  "message": "Stroke model trained and saved",
-  "mode": "stroke",
-  "samples": 89,
-  "classes": 18,
-  "model": "C:\\Users\\Admin\\Downloads\\AirDrawVocab\\models\\stroke_sequence_model.keras"
-}

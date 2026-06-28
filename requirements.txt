@@ -5,6 +5,9 @@
 tensorflow>=2.15,<2.22
 numpy>=1.26,<2.3
 scikit-learn>=1.3,<2.0
+# scipy: tăng tốc tính khoảng cách cho tính năng "Tô theo hình mẫu" (shape_match).
+# Không bắt buộc — nếu thiếu, shape_match tự fallback sang NumPy thuần.
+scipy>=1.10,<2.0
 
 # Computer vision + face recognition
 # Cần opencv-contrib-python để có cv2.face.LBPHFaceRecognizer_create

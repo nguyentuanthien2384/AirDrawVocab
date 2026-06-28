@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tô theo hình mẫu · AirDrawVocab</title>
+<!-- MediaPipe Hands: cùng CDN mà app chính đang dùng -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --line:#283241;
+    --ink:#e7edf3; --muted:#8a97a6; --accent:#ffb020;  /* outline mẫu */
+    --ok:#28c76f; --bad:#ff5d5d; --tip:#39c0ff;
+    --r:14px; --shadow:0 10px 30px rgba(0,0,0,.35);
+    --font:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 70% -10%,#13202b 0%,var(--bg) 55%);
+       color:var(--ink);font-family:var(--font);min-height:100vh}
+  .wrap{max-width:1120px;margin:0 auto;padding:22px 18px 60px}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  h1{font-size:22px;letter-spacing:.2px;margin:0;font-weight:700}
+  .sub{color:var(--muted);font-size:13px}
+  .badge{margin-left:auto;font-size:12px;color:var(--muted);border:1px solid var(--line);
+         padding:4px 10px;border-radius:999px}
+  .grid{display:grid;grid-template-columns:1fr 320px;gap:18px;margin-top:16px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
+  .stage{position:relative;background:#000;border-radius:var(--r);overflow:hidden;
+         aspect-ratio:16/9;box-shadow:var(--shadow);border:1px solid var(--line)}
+  .stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%}
+  .stage video{object-fit:cover;transform:scaleX(-1);opacity:.92}
+  #overlay{z-index:2}
+  .hint{position:absolute;left:12px;bottom:10px;z-index:3;font-size:12px;color:#cdd6e0;
+        background:rgba(0,0,0,.45);padding:6px 10px;border-radius:8px;backdrop-filter:blur(4px)}
+  .verdict{position:absolute;left:12px;top:12px;z-index:3;display:none;align-items:center;gap:12px;
+           background:rgba(8,12,18,.62);backdrop-filter:blur(6px);border:1px solid var(--line);
+           padding:10px 14px;border-radius:12px}
+  .verdict.show{display:flex}
+  .pct{font-size:34px;font-weight:800;line-height:1}
+  .v-meta{font-size:13px}
+  .v-stars{letter-spacing:3px;font-size:16px}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+         border-radius:var(--r);padding:16px;box-shadow:var(--shadow)}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);
+            margin:0 0 12px;font-weight:600}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px}
+  select,button{font-family:inherit}
+  select{width:100%;padding:10px;border-radius:10px;background:#0f141b;color:var(--ink);
+         border:1px solid var(--line);font-size:15px}
+  .row{display:flex;gap:10px;margin-top:12px}
+  button{flex:1;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+         background:#11171f;color:var(--ink);font-size:14px;cursor:pointer;transition:.15s}
+  button:hover{border-color:#3a4658;background:#151c26}
+  button.primary{background:var(--accent);color:#1a1205;border-color:var(--accent);font-weight:700}
+  button.primary:hover{filter:brightness(1.06)}
+  .bars{margin-top:6px}
+  .bar{margin:10px 0}
+  .bar .lab{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .track{height:9px;border-radius:6px;background:#0e131a;overflow:hidden;border:1px solid #0a0e13}
+  .fill{height:100%;width:0;background:linear-gradient(90deg,#2ea0ff,#36d399);transition:width .35s}
+  .msg{margin-top:14px;font-size:13px;color:#cdd6e0;min-height:18px}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:10px;flex-wrap:wrap}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  .err{color:var(--bad);font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Tô theo hình mẫu</h1>
+    <span class="sub">Đưa ngón trỏ lên — đồ theo đường mẫu — hệ thống chấm độ khớp</span>
+    <span class="badge" id="srcBadge">đang khởi động…</span>
+  </header>
+
+  <div class="grid">
+    <div>
+      <div class="stage">
+        <video id="cam" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="verdict" id="verdict">
+          <div class="pct" id="vPct">0%</div>
+          <div>
+            <div class="v-meta" id="vText">—</div>
+            <div class="v-stars" id="vStars"></div>
+          </div>
+        </div>
+        <div class="hint">Ngón trỏ duỗi + ngón giữa gập để vẽ · nhấc tay để chấm điểm</div>
+      </div>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--accent)"></span>Đường mẫu cần đồ</span>
+        <span><span class="dot" style="background:var(--ok)"></span>Nét bạn vẽ</span>
+        <span><span class="dot" style="background:var(--tip)"></span>Đầu ngón tay</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Bảng điều khiển</h2>
+      <label for="shapeSel">Hình mẫu</label>
+      <select id="shapeSel"></select>
+
+      <div class="row">
+        <button id="btnScore" class="primary">Chấm điểm</button>
+        <button id="btnClear">Xóa nét</button>
+      </div>
+      <div class="row">
+        <button id="btnCam">Bật camera</button>
+        <button id="btnMouse">Vẽ bằng chuột</button>
+      </div>
+
+      <div class="bars" style="margin-top:18px">
+        <div class="bar"><div class="lab"><span>Quỹ đạo</span><span id="lShape">0%</span></div><div class="track"><div class="fill" id="fShape"></div></div></div>
+        <div class="bar"><div class="lab"><span>Đầy đủ</span><span id="lCov">0%</span></div><div class="track"><div class="fill" id="fCov"></div></div></div>
+        <div class="bar"><div class="lab"><span>Sạch sẽ</span><span id="lPrec">0%</span></div><div class="track"><div class="fill" id="fPrec"></div></div></div>
+        <div class="bar"><div class="lab"><span>Góc/đường cong</span><span id="lCorn">0%</span></div><div class="track"><div class="fill" id="fCorn"></div></div></div>
+      </div>
+      <div class="msg" id="msg">Chọn một hình mẫu rồi bắt đầu đồ theo.</div>
+      <div class="err" id="err"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ====== Cấu hình ======
+const API = location.origin;            // cùng origin với backend (đã bật CORS *)
+const CANVAS_W = 960, CANVAS_H = 540;   // gửi điểm theo hệ quy chiếu này
+const MARGIN = 0.70;                    // tỉ lệ ô vuông vẽ outline (giống matcher/app desktop)
+
+const overlay = document.getElementById('overlay');
+overlay.width = CANVAS_W; overlay.height = CANVAS_H;
+const ctx = overlay.getContext('2d');
+const video = document.getElementById('cam');
+const $ = id => document.getElementById(id);
+
+let templatesData = {};   // name -> {points:[[x,y]..], closed, label_vi}
+let current = null;       // {name, points(px Nx2), closed}
+let stroke = [];          // [{x,y,t}] theo hệ 960x540
+let drawing = false, prevDrawing = false, mouseMode = false, mouseDown = false;
+let lastResult = null;
+
+// ====== Tiện ích hình học ======
+function fitUnitToBox(points){
+  const side = Math.min(CANVAS_W, CANVAS_H) * MARGIN;
+  const ox = (CANVAS_W - side)/2, oy = (CANVAS_H - side)/2;
+  return points.map(p => [p[0]*side+ox, p[1]*side+oy]);
+}
+
+// Bộ lọc One-Euro làm mượt đầu ngón tay (thay cho Kalman ở bản desktop)
+function makeOneEuro(minCutoff=1.6, beta=0.03, dcut=1.0){
+  let xPrev=null,dxPrev=0,tPrev=null;
+  const a=(cut,dt)=>{const r=2*Math.PI*cut*dt;return r/(r+1)};
+  return (x,t)=>{
+    if(tPrev===null){tPrev=t;xPrev=x;return x;}
+    const dt=Math.max((t-tPrev)/1000,1e-3); tPrev=t;
+    const dx=(x-xPrev)/dt; const ad=a(dcut,dt); dxPrev=ad*dx+(1-ad)*dxPrev;
+    const cut=minCutoff+beta*Math.abs(dxPrev); const ax=a(cut,dt);
+    xPrev=ax*x+(1-ax)*xPrev; return xPrev;
+  };
+}
+let fx=makeOneEuro(), fy=makeOneEuro();
+
+// ====== Vẽ overlay ======
+function drawScene(tipPx){
+  ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
+  if(current){
+    const pts=current.pointsPx;
+    ctx.lineWidth=14; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle='rgba(255,176,32,.35)';
+    ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+    if(current.closed) ctx.closePath();
+    ctx.stroke();
+    // điểm bắt đầu
+    ctx.fillStyle='#ffd36b'; ctx.beginPath(); ctx.arc(pts[0][0],pts[0][1],9,0,7); ctx.fill();
+  }
+  if(stroke.length>1){
+    ctx.lineWidth=5; ctx.strokeStyle=getComputedStyle(document.body).getPropertyValue('--ok')||'#28c76f';
+    ctx.beginPath(); ctx.moveTo(stroke[0].x,stroke[0].y);
+    for(let i=1;i<stroke.length;i++) ctx.lineTo(stroke[i].x,stroke[i].y);
+    ctx.stroke();
+  }
+  if(tipPx){ ctx.fillStyle='#39c0ff'; ctx.beginPath(); ctx.arc(tipPx[0],tipPx[1],8,0,7); ctx.fill(); }
+}
+
+// ====== Nạp danh sách hình mẫu ======
+async function loadTemplates(){
+  try{
+    const res=await fetch(API+'/shape/templates');
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    const sel=$('shapeSel'); sel.innerHTML='';
+    data.templates.forEach(t=>{
+      templatesData[t.name]=t;
+      const o=document.createElement('option');
+      o.value=t.name; o.textContent=`${t.label_vi||t.name} (${t.name})`;
+      sel.appendChild(o);
+    });
+    sel.value = templatesData['star'] ? 'star' : data.templates[0].name;
+    selectShape(sel.value);
+  }catch(e){
+    $('err').textContent='Không tải được /shape/templates. Đã gắn router shape vào backend chưa? '+e.message;
+  }
+}
+function selectShape(name){
+  const t=templatesData[name]; if(!t) return;
+  current={name,closed:t.closed,pointsPx:fitUnitToBox(t.points)};
+  clearStroke(); drawScene(null);
+}
+function clearStroke(){ stroke=[]; lastResult=null; $('verdict').classList.remove('show');
+  setBars({shape_score:0,coverage:0,precision:0,corner_score:0}); $('msg').textContent='Bắt đầu đồ theo đường mẫu.'; }
+
+// ====== Chấm điểm ======
+async function scoreStroke(){
+  $('err').textContent='';
+  if(stroke.length<8){ $('msg').textContent='Nét còn ngắn — hãy đồ trọn hình mẫu.'; return; }
+  try{
+    const res=await fetch(API+'/shape/score',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({target:current.name,strokes:[stroke],canvas_w:CANVAS_W,canvas_h:CANVAS_H})});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const r=await res.json(); lastResult=r; showResult(r);
+  }catch(e){ $('err').textContent='Lỗi gọi /shape/score: '+e.message; }
+}
+function setBars(r){
+  const set=(f,l,v)=>{const p=Math.round((v||0)*100);$(f).style.width=p+'%';$(l).textContent=p+'%';};
+  set('fShape','lShape',r.shape_score); set('fCov','lCov',r.coverage);
+  set('fPrec','lPrec',r.precision); set('fCorn','lCorn',r.corner_score);
+}
+function showResult(r){
+  setBars(r);
+  const v=$('verdict'); v.classList.add('show');
+  $('vPct').textContent=Math.round(r.accuracy)+'%';
+  const col=r.passed?getComputedStyle(document.body).getPropertyValue('--ok'):getComputedStyle(document.body).getPropertyValue('--bad');
+  $('vPct').style.color=col;
+  $('vText').textContent=r.passed?'ĐẠT':'CHƯA ĐẠT';
+  $('vStars').textContent='★'.repeat(r.stars)+'☆'.repeat(3-r.stars);
+  $('vStars').style.color=col;
+  $('msg').textContent=r.message||'';
+}
+
+// ====== Vòng lặp MediaPipe ======
+let hands=null, rafId=null, camStream=null;
+function tipFromLandmarks(lm){
+  // landmark 8 = đầu ngón trỏ (toạ độ chuẩn hoá 0..1). Lật X vì video mirror.
+  const nx=1-lm[8].x, ny=lm[8].y;
+  return [nx*CANVAS_W, ny*CANVAS_H];
+}
+function isDrawing(lm){ return (lm[8].y<lm[6].y) && (lm[12].y>lm[10].y); }
+
+function onResults(res){
+  let tipPx=null;
+  if(res.multiHandLandmarks && res.multiHandLandmarks.length){
+    const lm=res.multiHandLandmarks[0];
+    const raw=tipFromLandmarks(lm); const t=performance.now();
+    tipPx=[fx(raw[0],t),fy(raw[1],t)];
+    drawing=isDrawing(lm);
+    if(drawing) stroke.push({x:tipPx[0],y:tipPx[1],t:Date.now()});
+  }else{ drawing=false; }
+  if(prevDrawing && !drawing && stroke.length>=8) scoreStroke();  // nhấc tay -> tự chấm
+  prevDrawing=drawing;
+  drawScene(tipPx);
+}
+
+async function startCamera(){
+  $('err').textContent='';
+  try{
+    camStream=await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720},audio:false});
+    video.srcObject=camStream; await video.play();
+    $('srcBadge').textContent='camera';
+    mouseMode=false;
+    if(!hands){
+      hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+      hands.setOptions({maxNumHands:1,modelComplexity:1,minDetectionConfidence:0.7,minTrackingConfidence:0.6});
+      hands.onResults(onResults);
+    }
+    const loop=async()=>{ if(video.readyState>=2){ await hands.send({image:video}); } rafId=requestAnimationFrame(loop); };
+    loop();
+  }catch(e){
+    $('srcBadge').textContent='không có camera';
+    $('err').textContent='Không bật được camera ('+e.message+'). Hãy dùng "Vẽ bằng chuột".';
+    enableMouse();
+  }
+}
+function stopCamera(){ if(rafId)cancelAnimationFrame(rafId); rafId=null;
+  if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null;} }
+
+// ====== Vẽ bằng chuột (fallback) ======
+function toCanvasXY(ev){
+  const r=overlay.getBoundingClientRect();
+  return [(ev.clientX-r.left)/r.width*CANVAS_W,(ev.clientY-r.top)/r.height*CANVAS_H];
+}
+function enableMouse(){
+  stopCamera(); mouseMode=true; $('srcBadge').textContent='chuột'; video.style.display='none';
+  $('msg').textContent='Giữ chuột trái và đồ theo đường mẫu.';
+}
+overlay.addEventListener('mousedown',e=>{ if(!mouseMode)return; mouseDown=true; clearStroke();
+  const [x,y]=toCanvasXY(e); stroke.push({x,y,t:Date.now()}); drawScene([x,y]); });
+overlay.addEventListener('mousemove',e=>{ if(!mouseMode||!mouseDown)return;
+  const [x,y]=toCanvasXY(e); stroke.push({x,y,t:Date.now()}); drawScene([x,y]); });
+window.addEventListener('mouseup',()=>{ if(mouseMode&&mouseDown){mouseDown=false; if(stroke.length>=8) scoreStroke();} });
+
+// ====== Sự kiện ======
+$('shapeSel').addEventListener('change',e=>selectShape(e.target.value));
+$('btnScore').addEventListener('click',scoreStroke);
+$('btnClear').addEventListener('click',()=>{clearStroke();drawScene(null);});
+$('btnCam').addEventListener('click',()=>{video.style.display='';startCamera();});
+$('btnMouse').addEventListener('click',enableMouse);
+
+loadTemplates();
+</script>
+</body>
+</html>

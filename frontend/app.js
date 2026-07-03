@@ -47,6 +47,13 @@ const state = {
   strokes: [],
   lastPoint: null,
   lastPalmClear: 0,
+  // --- Vẽ tay camera (bút ngón trỏ) mượt & không đứt nét qua khuôn mặt ---
+  lastRawHand: null, // toạ độ thô đầu ngón khung trước (để phát hiện nhảy xa)
+  lastDrawPoint: null, // điểm ĐÃ vẽ gần nhất (đã lọc) để nối tiếp/nội suy
+  strokePaused: false, // nét đang tạm dừng vì mất tay (che mặt) chứ chưa kết thúc
+  strokeLostAt: 0, // thời điểm bắt đầu mất tay, để đo khoảng ân hạn
+  penDownFrames: 0, // số khung liên tục ngón trỏ đang duỗi (bút xuống)
+  penUpFrames: 0, // số khung liên tục ngón trỏ co lại (chuẩn bị nhấc bút)
   leaderboard: [],
   profile: null,
   pvpSocket: null,
@@ -574,7 +581,9 @@ function extendStroke(point) {
   // CHỐNG "KÉO NÉT": nếu đầu ngón nhảy quá xa giữa 2 khung (thường do nhấc tay
   // rồi đặt sang chỗ khác), KHÔNG nối liền mà KẾT THÚC nét cũ và BẮT ĐẦU nét mới
   // -> mỗi nét tách bạch, không bị đường thẳng nối các nét như trước.
-  const MAX_JUMP = 150;
+  // Ngưỡng nâng lên 220: tay vẫy NHANH (nhiều px/khung) vẫn được NỘI SUY liền
+  // mạch thay vì bị cắt vụn; chỉ nhảy thật xa (đổi chỗ) mới tách nét.
+  const MAX_JUMP = 220;
   if (dist > MAX_JUMP) {
     endStroke();
     beginStroke(point);
@@ -582,15 +591,22 @@ function extendStroke(point) {
   }
   // Nội suy: nếu khoảng cách vừa phải nhưng hơi lớn (tay di nhanh), chèn điểm
   // trung gian để nét trong CÙNG một stroke vẫn liền mạch.
-  const STEP = 18;
+  // QUAN TRỌNG: nội suy dựa trên ĐIỂM GỐC CỐ ĐỊNH (origin), KHÔNG dùng
+  // state.lastPoint đang bị cập nhật trong vòng lặp -> nếu dùng lastPoint đang
+  // đổi thì offset bị CỘNG DỒN gây điểm giữa VỌT QUÁ đích (nét lượn/nguệch ngoạc
+  // khi tay đi nhanh). Cố định origin để các điểm giữa cách đều, đúng đường thẳng.
+  const STEP = 14;
   if (dist > STEP * 1.5) {
-    const steps = Math.min(20, Math.floor(dist / STEP));
+    const originX = state.lastPoint.x;
+    const originY = state.lastPoint.y;
+    const originT = state.lastPoint.t;
+    const steps = Math.min(32, Math.floor(dist / STEP));
     for (let i = 1; i < steps; i++) {
       const t = i / steps;
       const mid = {
-        x: state.lastPoint.x + dx * t,
-        y: state.lastPoint.y + dy * t,
-        t: state.lastPoint.t + (point.t - state.lastPoint.t) * t,
+        x: originX + dx * t,
+        y: originY + dy * t,
+        t: originT + (point.t - originT) * t,
       };
       drawSegment(state.lastPoint, mid);
       state.currentStroke.push(mid);
@@ -988,6 +1004,12 @@ function clearDrawing() {
   state.lastMid = null;
   state.penLiftFrames = 0;
   state.filteredPoint = null;
+  state.lastRawHand = null;
+  state.lastDrawPoint = null;
+  state.strokePaused = false;
+  state.strokeLostAt = 0;
+  state.penDownFrames = 0;
+  state.penUpFrames = 0;
   if (typeof resetHandEuro === "function") resetHandEuro();
   state.predictionBuffer = [];
   state.consecutiveCorrect = 0;
@@ -2473,10 +2495,12 @@ async function ensureHandsReady() {
     // modelComplexity 0 = nhẹ & nhanh hơn nhiều trên trình duyệt -> nhiều khung
     // hình/giây hơn -> nét vẽ liền mạch, ít đứt khúc.
     modelComplexity: 0,
-    // Hạ ngưỡng tracking để MediaPipe duy trì bám ngón tay liên tục giữa các
-    // khung (ít mất tay giữa chừng -> ít gãy nét).
+    // minDetectionConfidence hơi cao để KHỞI TẠO bám tay chắc chắn, nhưng
+    // minTrackingConfidence HẠ THẬT THẤP để MediaPipe TIẾP TỤC bám ngón tay
+    // ngay cả khi bàn tay đi ngang qua KHUÔN MẶT (nền da mặt dễ làm mất tay).
+    // Giữ bám lâu hơn = ít mất tay giữa chừng = ít đứt nét khi vẽ qua mặt.
     minDetectionConfidence: 0.6,
-    minTrackingConfidence: 0.4,
+    minTrackingConfidence: 0.25,
   });
   state.hands.onResults(onHandResults);
   return true;
@@ -2662,6 +2686,12 @@ function stopCamera() {
   if (typeof resetHandEuro === "function") resetHandEuro();
   state.penLiftFrames = 0;
   state.lastMid = null;
+  state.lastRawHand = null;
+  state.lastDrawPoint = null;
+  state.strokePaused = false;
+  state.strokeLostAt = 0;
+  state.penDownFrames = 0;
+  state.penUpFrames = 0;
   clearFaceOverlay();
 }
 
@@ -2875,6 +2905,42 @@ function drawFaceOverlay(ctx, landmarks, metrics) {
   ctx.restore();
 }
 
+// Ngưỡng cho luồng vẽ tay camera (đặt tên rõ để dễ tinh chỉnh):
+const HAND_LOST_GRACE_MS = 700; // mất tay (che mặt) trong ngần này -> GIỮ nét, chờ nối tiếp
+const RESUME_MAX_GAP_PX = 260; // tay hiện lại trong bán kính này -> NỐI vào nét cũ (bắc cầu)
+const PEN_UP_FRAMES = 5; // số khung liên tục co ngón mới thật sự NHẤC bút (chống rung, tránh đứt nét giữa chừng)
+const NEW_STROKE_JUMP_PX = 210; // nhảy xa hơn giữa 2 khung -> coi là đổi chỗ -> tách nét mới
+const HAND_MIN_MOVE_PX = 1.6; // dịch nhỏ hơn -> bỏ qua (khử rung khi tay gần đứng yên)
+
+// Map toạ độ ngón tay (chuẩn hoá [0,1] trong KHUNG WEBCAM) sang toạ độ NỘI BỘ
+// canvas, đi qua ĐÚNG phép biến đổi hiển thị `object-fit: cover` + lật gương của
+// thẻ <video>. Đây là mấu chốt để nét vẽ nằm CHÍNH XÁC dưới đầu ngón trỏ, không
+// còn bị "lệch" do webcam 4:3 bị co/cắt để phủ khung 16:9.
+function handNormToCanvas(nx, ny) {
+  const video = $("#cameraVideo");
+  const canvas = $("#handCanvas");
+  const vidW = video?.videoWidth || 4;
+  const vidH = video?.videoHeight || 3;
+  const rect = canvas?.getBoundingClientRect();
+  const boxW = rect?.width || CANVAS_W;
+  const boxH = rect?.height || CANVAS_H;
+  // Video hiển thị lật ngang (gương selfie) -> lật x trước khi map.
+  const mx = 1 - nx;
+  // object-fit: cover -> scale theo cạnh lớn hơn rồi căn giữa (phần thừa bị cắt).
+  const scale = Math.max(boxW / vidW, boxH / vidH);
+  const dispW = vidW * scale;
+  const dispH = vidH * scale;
+  const offX = (boxW - dispW) / 2;
+  const offY = (boxH - dispH) / 2;
+  const screenX = offX + mx * dispW;
+  const screenY = offY + ny * dispH;
+  // Ô hiển thị (CSS px) -> toạ độ nội bộ canvas (CANVAS_W x CANVAS_H).
+  return {
+    x: (screenX / boxW) * CANVAS_W,
+    y: (screenY / boxH) * CANVAS_H,
+  };
+}
+
 function onHandResults(results) {
   if (state.cameraTool !== "hand") return;
   const canvas = $("#handCanvas");
@@ -2882,36 +2948,43 @@ function onHandResults(results) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   const landmarks = results.multiHandLandmarks?.[0];
+  const now = Date.now();
+
   if (!landmarks) {
-    // Mất tay 1-2 frame là chuyện thường của MediaPipe -> KHÔNG ngắt nét ngay,
-    // chờ đủ số frame mới nhấc bút để nét không bị đứt khúc.
-    liftPenDebounced();
+    // MẤT TAY: gần như luôn xảy ra khi bàn tay đi ngang qua KHUÔN MẶT (nền da
+    // mặt làm MediaPipe rớt tay vài khung). KHÔNG kết thúc nét ngay như trước
+    // (đó chính là lý do "nét bị đứt khi vẽ qua mặt"). Thay vào đó TẠM DỪNG nét
+    // và giữ trong khoảng ân hạn; khi tay hiện lại kịp thời -> NỐI TIẾP liền mạch.
+    handleHandLost(now);
     return;
   }
+
   drawHandSkeleton(ctx, landmarks);
   const wrist = landmarks[0];
   const index = landmarks[8];
   const indexPip = landmarks[6];
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  // Phát hiện "ngón trỏ duỗi để vẽ" KHÔNG phụ thuộc hướng tay (xoay ngang vẫn
-  // đúng): so sánh khoảng cách đầu ngón -> cổ tay với khớp PIP -> cổ tay.
-  //  - Ngón duỗi: đầu ngón ở xa cổ tay hơn PIP  -> ratio > 1.
-  //  - Ngón gập (nhấc bút): đầu ngón co lại gần lòng bàn tay -> ratio nhỏ.
-  // Hysteresis: bắt đầu vẽ cần duỗi rõ; ngừng khi gập rõ -> nét vừa liền vừa
-  // tách bạch đúng lúc nhấc tay.
+  // Phát hiện "ngón trỏ duỗi để vẽ" bằng 2 tín hiệu bổ trợ nhau cho ổn định:
+  //  (1) ratio bất biến hướng (xoay tay ngang vẫn đúng): đầu ngón xa cổ tay hơn PIP.
+  //  (2) kiểu QuickDraw: đầu ngón cao hơn đốt PIP (ngón chĩa lên) -> bút xuống.
+  // Hysteresis: cần duỗi rõ mới bắt đầu; chỉ nhả khi co rõ -> nét vừa liền vừa
+  // tách bạch đúng lúc nhấc tay, ít bật/tắt lung tung gây nguệch ngoạc.
   const ratio = dist(index, wrist) / Math.max(1e-4, dist(indexPip, wrist));
-  const DOWN_ON = 1.18; // duỗi rõ mới bắt đầu nét mới
-  const DOWN_OFF = 1.04; // co lại quá mức này -> nhấc bút (tách nét)
-  const wasDrawing = Boolean(state.currentStroke);
-  const indexUp = wasDrawing ? ratio > DOWN_OFF : ratio > DOWN_ON;
+  const tipAbovePip = index.y < indexPip.y - 0.006;
+  const DOWN_ON = 1.12; // duỗi rõ mới bắt đầu nét mới (hạ nhẹ để dễ bắt đầu nét)
+  const DOWN_OFF = 1.02; // co lại quá mức này -> chuẩn bị nhấc bút (giữ nét lâu hơn)
+  const drawingNow = Boolean(state.currentStroke) && !state.strokePaused;
+  const ratioUp = drawingNow ? ratio > DOWN_OFF : ratio > DOWN_ON;
+  const indexUp = ratioUp || (tipAbovePip && ratio > DOWN_OFF);
+
   // Xòe cả bàn tay để xóa: 4 đầu ngón đều xa cổ tay (rotation-invariant).
   const openPalm = [8, 12, 16, 20].every(
     (tip) =>
-      dist(landmarks[tip], wrist) > dist(landmarks[tip - 2], wrist) * 1.1,
+      dist(landmarks[tip], wrist) > dist(landmarks[tip - 2], wrist) * 1.12,
   );
-  const now = Date.now();
   if (openPalm && now - state.lastPalmClear > 1600) {
     state.lastPalmClear = now;
+    finishCurrentStroke();
     clearDrawing();
     setStatus("Đã xóa nét bằng thao tác xòe bàn tay.");
     return;
@@ -2936,45 +3009,154 @@ function onHandResults(results) {
     now - (state.lastGestureRecognize || 0) > 2500
   ) {
     state.lastGestureRecognize = now;
-    if (state.currentStroke) endStroke();
-    drawPenCursor(ctx, (1 - index.x) * CANVAS_W, index.y * CANVAS_H, false);
+    finishCurrentStroke();
+    const gpos = handNormToCanvas(index.x, index.y);
+    drawPenCursor(ctx, gpos.x, gpos.y, false);
     setStatus("Cử chỉ 3 ngón: đang nhận diện nét vẽ...", "ok");
     manualRecognizeDrawing();
     return;
   }
 
   if (!state.running && !state.currentTarget) return;
+
+  // --- Debounce trạng thái bút: đếm số khung liên tục để đổi trạng thái, tránh
+  //     một khung nhiễu làm nhấc bút giữa chừng (đứt nét li ti / nguệch ngoạc) ---
+  if (indexUp) {
+    state.penDownFrames = (state.penDownFrames || 0) + 1;
+    state.penUpFrames = 0;
+  } else {
+    state.penUpFrames = (state.penUpFrames || 0) + 1;
+    state.penDownFrames = 0;
+  }
+
   if (!indexUp) {
-    // Vẫn hiển thị con trỏ (rỗng) để người dùng ngắm vị trí trước khi hạ bút vẽ.
-    drawPenCursor(ctx, (1 - index.x) * CANVAS_W, index.y * CANVAS_H, false);
-    state.lastRawHand = null;
-    liftPenDebounced();
+    // Ngón co lại: hiển thị con trỏ rỗng để ngắm vị trí. Chỉ NHẤC BÚT (kết thúc
+    // nét) khi co đủ lâu -> chống rung. Nếu chưa đủ lâu, giữ nguyên nét hiện tại.
+    const cpos = handNormToCanvas(index.x, index.y);
+    drawPenCursor(ctx, cpos.x, cpos.y, false);
+    if (state.penUpFrames >= PEN_UP_FRAMES) {
+      finishCurrentStroke();
+    }
     return;
   }
-  // Ngón trỏ đang vẽ -> reset bộ đếm nhấc bút
-  state.penLiftFrames = 0;
+
+  // --- Bút đang xuống: toạ độ map qua object-fit:cover nên nằm đúng dưới ngón ---
+  const mapped = handNormToCanvas(index.x, index.y);
   const raw = {
-    x: (1 - index.x) * CANVAS_W,
-    y: index.y * CANVAS_H,
+    x: mapped.x,
+    y: mapped.y,
     t: performance.now(),
   };
-  // Tách nét trên toạ độ THÔ: nếu đầu ngón nhảy xa (nhấc tay đổi vị trí) thì
-  // kết thúc nét cũ và reset bộ lọc -> nét mới bắt đầu sạch, không bị kéo nối.
+
+  // Nếu nét đang TẠM DỪNG (vừa mất tay khi che mặt), quyết định nối tiếp hay mở mới:
+  if (state.currentStroke && state.strokePaused) {
+    const anchor = state.lastDrawPoint || state.lastRawHand;
+    const gap = anchor
+      ? Math.hypot(raw.x - anchor.x, raw.y - anchor.y)
+      : Infinity;
+    const withinTime = now - (state.strokeLostAt || 0) <= HAND_LOST_GRACE_MS;
+    if (withinTime && gap <= RESUME_MAX_GAP_PX) {
+      // Kịp thời & gần chỗ mất -> NỐI TIẾP: bắc cầu nội suy qua vùng che mặt
+      // để nét đi xuyên qua mặt liền mạch, không còn bị cắt đôi.
+      state.strokePaused = false;
+      resumeStrokeBridge(raw);
+      return;
+    }
+    // Quá lâu hoặc quá xa -> đóng nét cũ, bắt đầu nét mới sạch từ đây.
+    finishCurrentStroke();
+  }
+
+  // Tách nét khi nhảy XA thật sự (đổi chỗ chủ động) trên toạ độ thô.
   if (state.currentStroke && state.lastRawHand) {
     const jump = Math.hypot(
       raw.x - state.lastRawHand.x,
       raw.y - state.lastRawHand.y,
     );
-    if (jump > 150) {
-      endStroke();
-      resetHandEuro();
+    if (jump > NEW_STROKE_JUMP_PX) {
+      finishCurrentStroke();
     }
   }
   state.lastRawHand = { x: raw.x, y: raw.y };
+
   const p = smoothPoint(raw);
   drawPenCursor(ctx, p.x, p.y, true);
-  if (!state.currentStroke) beginStroke(p);
-  else extendStroke(p);
+
+  if (!state.currentStroke) {
+    beginStroke(p);
+    state.lastDrawPoint = p;
+    return;
+  }
+  // Khử rung khi tay gần đứng yên: chỉ thêm điểm nếu dịch đủ xa.
+  const moved = state.lastDrawPoint
+    ? Math.hypot(p.x - state.lastDrawPoint.x, p.y - state.lastDrawPoint.y)
+    : Infinity;
+  if (moved >= HAND_MIN_MOVE_PX) {
+    extendStroke(p);
+    state.lastDrawPoint = p;
+  }
+}
+
+// Kết thúc HẲN nét hiện tại và dọn toàn bộ trạng thái bút tay -> nét sau bắt
+// đầu sạch, không bị kéo nối từ nét trước.
+function finishCurrentStroke() {
+  if (state.currentStroke) endStroke();
+  state.strokePaused = false;
+  state.strokeLostAt = 0;
+  state.penDownFrames = 0;
+  state.penUpFrames = 0;
+  state.lastRawHand = null;
+  state.lastDrawPoint = null;
+  state.penLiftFrames = 0;
+  resetHandEuro();
+}
+
+// Xử lý khi MẤT TAY: tạm dừng nét (không kết thúc) và giữ trong khoảng ân hạn.
+// Đây là mấu chốt để "vẽ qua khuôn mặt" không bị đứt nét.
+function handleHandLost(now) {
+  if (!state.currentStroke) return;
+  if (!state.strokePaused) {
+    state.strokePaused = true;
+    state.strokeLostAt = now;
+    return;
+  }
+  // Đã tạm dừng quá lâu (tay không quay lại) -> đóng nét.
+  if (now - (state.strokeLostAt || 0) > HAND_LOST_GRACE_MS) {
+    finishCurrentStroke();
+  }
+}
+
+// Nối tiếp nét cũ sau khi tay hiện lại: nội suy thẳng từ điểm đã vẽ cuối tới vị
+// trí mới để đường đi qua vùng che mặt LIỀN MẠCH (bắc cầu), rồi vẽ tiếp bình thường.
+function resumeStrokeBridge(raw) {
+  const p = smoothPoint(raw);
+  const anchor = state.lastDrawPoint || state.lastPoint;
+  if (!state.currentStroke || !anchor) {
+    if (!state.currentStroke) beginStroke(p);
+    else extendStroke(p);
+    state.lastDrawPoint = p;
+    state.lastRawHand = { x: raw.x, y: raw.y };
+    return;
+  }
+  const dx = p.x - anchor.x;
+  const dy = p.y - anchor.y;
+  const bridge = Math.hypot(dx, dy);
+  const STEP = 14;
+  const steps = Math.max(1, Math.min(40, Math.floor(bridge / STEP)));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const mid = {
+      x: anchor.x + dx * t,
+      y: anchor.y + dy * t,
+      t: (anchor.t || performance.now()) + (p.t - (anchor.t || p.t)) * t,
+    };
+    drawSegment(state.lastPoint || mid, mid);
+    state.currentStroke.push(mid);
+    state.lastPoint = mid;
+  }
+  state.lastDrawPoint = p;
+  state.lastRawHand = { x: raw.x, y: raw.y };
+  state.hasDrawn = true;
+  updateRecognizeButton();
 }
 
 // Vẽ con trỏ bút ở đầu ngón trỏ để người dùng biết CHÍNH XÁC điểm sẽ vẽ và
@@ -3022,7 +3204,7 @@ function liftPenDebounced() {
 //  - Khi tay đứng yên/đi chậm: lọc mạnh -> hết rung, nét mượt.
 //  - Khi tay di nhanh: giảm lọc -> bám sát, ít trễ -> vẽ đúng hình mong muốn.
 // ---------------------------------------------------------------------------
-function makeOneEuro({ minCutoff = 1.2, beta = 0.015, dCutoff = 1.0 } = {}) {
+function makeOneEuro({ minCutoff = 1.0, beta = 0.007, dCutoff = 1.0 } = {}) {
   let xPrev = null;
   let dxPrev = 0;
   let tPrev = null;
@@ -3061,8 +3243,10 @@ function makeOneEuro({ minCutoff = 1.2, beta = 0.015, dCutoff = 1.0 } = {}) {
 
 function ensureHandEuro() {
   if (!state.euroX) {
-    state.euroX = makeOneEuro({ minCutoff: 1.2, beta: 0.015 });
-    state.euroY = makeOneEuro({ minCutoff: 1.2, beta: 0.015 });
+    // minCutoff thấp -> khi tay đi CHẬM lọc mạnh, hết rung (nguệch ngoạc biến mất).
+    // beta nhỏ -> khi tay đi NHANH vẫn giữ đủ mượt mà không trễ nhiều -> nét sạch.
+    state.euroX = makeOneEuro({ minCutoff: 1.0, beta: 0.007 });
+    state.euroY = makeOneEuro({ minCutoff: 1.0, beta: 0.007 });
   }
 }
 function resetHandEuro() {

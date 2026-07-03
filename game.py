@@ -413,6 +413,19 @@ class HandTracker:
                 fingers_up += 1
         return fingers_up >= 4
 
+    def is_recognize_gesture(self):
+        """Cử chỉ NHẬN DIỆN kiểu QuickDraw (port từ mediapipe_app.py): giơ 3 ngón
+        trỏ + giữa + áp út lên, GẬP ngón út -> tự chấm điểm nét vừa vẽ.
+
+        Ngón út gập để phân biệt với thao tác xòe cả bàn tay (xóa)."""
+        if not self.landmarks:
+            return False
+        index_up = self.landmarks[8][1] < self.landmarks[6][1]
+        middle_up = self.landmarks[12][1] < self.landmarks[10][1]
+        ring_up = self.landmarks[16][1] < self.landmarks[14][1]
+        pinky_up = self.landmarks[20][1] < self.landmarks[18][1]
+        return index_up and middle_up and ring_up and not pinky_up
+
     def draw_landmarks(self, frame):
         """Tự vẽ khung xương bàn tay lên frame (dùng chung cho cả 2 backend)."""
         if not self.landmarks:
@@ -437,23 +450,49 @@ class DrawingCanvas:
         self.canvas = np.zeros((height, width), dtype=np.uint8)
         self.prev_point = None
         self.brush_size = 12
+        # Làm mượt vị trí ngón tay (nét camera đỡ rung/lệch) và chặn nhảy xa.
+        self.smooth_point = None
+        self.max_jump = 120
 
-    def draw_line(self, x, y):
-        """Vẽ nét từ điểm trước đến điểm hiện tại"""
+    def draw_line(self, x, y, smooth=False):
+        """Vẽ nét từ điểm trước đến điểm hiện tại.
+
+        smooth=True (camera): làm mượt THÍCH ỨNG theo tốc độ — đi chậm lọc mạnh
+        (hết rung), đi nhanh bám sát (ít trễ) — và chặn bước nhảy bất thường để
+        không kẻ vạch ngang qua hình khi mất tracking. smooth=False (chuột): vẽ thẳng.
+        """
+        if smooth:
+            if self.smooth_point is None:
+                sx, sy = float(x), float(y)
+            else:
+                px, py = self.smooth_point
+                dist = ((x - px) ** 2 + (y - py) ** 2) ** 0.5
+                a = min(0.92, max(0.30, 0.30 + dist / 40.0))
+                sx = a * x + (1 - a) * px
+                sy = a * y + (1 - a) * py
+            self.smooth_point = (sx, sy)
+            x, y = int(round(sx)), int(round(sy))
+
         if self.prev_point is not None:
-            cv2.line(self.canvas, self.prev_point, (x, y), 255, self.brush_size)
+            px, py = self.prev_point
+            if smooth and ((x - px) ** 2 + (y - py) ** 2) > self.max_jump ** 2:
+                cv2.circle(self.canvas, (x, y), self.brush_size // 2, 255, -1, lineType=cv2.LINE_AA)
+            else:
+                cv2.line(self.canvas, self.prev_point, (x, y), 255, self.brush_size, lineType=cv2.LINE_AA)
         else:
-            cv2.circle(self.canvas, (x, y), self.brush_size // 2, 255, -1)
+            cv2.circle(self.canvas, (x, y), self.brush_size // 2, 255, -1, lineType=cv2.LINE_AA)
         self.prev_point = (x, y)
 
     def stop_drawing(self):
-        """Dừng vẽ (ngón tay rời canvas)"""
+        """Dừng vẽ (nhấc bút) — reset để nét sau không dính vào nét trước."""
         self.prev_point = None
+        self.smooth_point = None
 
     def clear(self):
         """Xóa canvas"""
         self.canvas = np.zeros((self.height, self.width), dtype=np.uint8)
         self.prev_point = None
+        self.smooth_point = None
 
     def get_preprocessed_image(self):
         """
@@ -693,7 +732,9 @@ class AirDrawVocabGame:
         # Trạng thái bút tay: giữ nét khi tay đi qua mặt / mất tracking tạm thời.
         self.pen_down = False
         self.pen_miss_frames = 0
-        self.PEN_MISS_TOLERANCE = 12
+        self.PEN_MISS_TOLERANCE = 18
+        # Chống lặp khi giơ 3 ngón để auto nhận diện (kiểu QuickDraw).
+        self.last_gesture_recognize = 0.0
 
         # === AI ASSISTANT ===
         self.ai_manager = None
@@ -846,9 +887,9 @@ class AirDrawVocabGame:
         self.screen.blit(head, (card.x + 28, card.y + 22))
 
         instructions = [
-            ("1", "Giơ ngón trỏ lên để vẽ trong không khí"),
-            ("2", "Mở bàn tay (5 ngón) để dừng / nhấc bút"),
-            ("3", "AI sẽ nhận diện hình vẽ của bạn theo thời gian thực"),
+            ("1", "Giơ ngón trỏ để vẽ, gập ngón trỏ để nhấc bút"),
+            ("2", "Giơ 3 ngón (trỏ+giữa+áp út) để AI nhận diện"),
+            ("3", "Xòe cả bàn tay để nhấc bút / tạm dừng"),
             ("4", "Vẽ đúng từ vựng trước khi hết giờ để ghi điểm"),
         ]
         row_gap = 38
@@ -1180,25 +1221,47 @@ class AirDrawVocabGame:
                 self.hand_tracker.find_hands(frame)
                 finger_pos = self.hand_tracker.get_index_finger_tip(frame)
                 erase_gesture = self.hand_tracker.is_erase_gesture()
-                start_gesture = self.hand_tracker.is_drawing_gesture()
-                continue_gesture = self.pen_down and self.hand_tracker.is_index_extended()
+                recognize_gesture = self.hand_tracker.is_recognize_gesture()
+                # Cử chỉ vẽ kiểu QuickDraw: chỉ cần NGÓN TRỎ DUỖI là vẽ (ổn định hơn
+                # kiểu "trỏ duỗi + giữa gập" hay chập chờn). Ngón trỏ gập = nhấc bút.
+                index_extended = self.hand_tracker.is_index_extended()
 
-                if erase_gesture:
+                now_t = time.time()
+                if recognize_gesture:
+                    # Giơ 3 ngón (trỏ+giữa+áp út) -> tự nhận diện nét vừa vẽ (rảnh tay).
                     self.pen_down = False
                     self.pen_miss_frames = 0
                     self.drawing_canvas.stop_drawing()
-                elif finger_pos and (start_gesture or continue_gesture):
-                    cx, cy = finger_pos
-                    self.pen_down = True
+                    if (
+                        self.drawing_canvas.has_content()
+                        and now_t - self.last_gesture_recognize > 2.0
+                    ):
+                        self.last_gesture_recognize = now_t
+                        self.check_prediction()
+                elif erase_gesture:
+                    # Xòe cả bàn tay (>=4 ngón) -> nhấc bút.
+                    self.pen_down = False
                     self.pen_miss_frames = 0
-                    self.drawing_canvas.draw_line(cx, cy)
-                    cv2.circle(frame, (cx, cy), 8, (0, 255, 255), -1)
-                elif self.pen_down and self.pen_miss_frames < self.PEN_MISS_TOLERANCE:
-                    self.pen_miss_frames += 1
-                    if finger_pos:
+                    self.drawing_canvas.stop_drawing()
+                elif finger_pos is not None:
+                    if index_extended:
                         cx, cy = finger_pos
-                        self.drawing_canvas.draw_line(cx, cy)
+                        # Vừa qua đoạn mất tay -> bỏ trạng thái mượt cũ để bám vị trí mới.
+                        if self.pen_miss_frames > 0:
+                            self.drawing_canvas.smooth_point = None
+                        self.pen_down = True
+                        self.pen_miss_frames = 0
+                        self.drawing_canvas.draw_line(cx, cy, smooth=True)
                         cv2.circle(frame, (cx, cy), 8, (0, 255, 255), -1)
+                    else:
+                        # Gập ngón trỏ khi tay vẫn hiện -> nhấc bút NGAY (không kéo dài
+                        # sang chỗ mới), nét kế tiếp bắt đầu sạch.
+                        self.pen_down = False
+                        self.pen_miss_frames = 0
+                        self.drawing_canvas.stop_drawing()
+                elif self.pen_down and self.pen_miss_frames < self.PEN_MISS_TOLERANCE:
+                    # Mất tay tạm thời (lướt qua mặt): GIỮ bút, chờ tay quay lại nối tiếp.
+                    self.pen_miss_frames += 1
                 else:
                     self.pen_down = False
                     self.pen_miss_frames = 0
